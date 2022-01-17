@@ -25,6 +25,7 @@ jobs:
 
       - name: Build ${{ matrix.asset }}
         run: |
+          git rev-parse --abbrev-ref HEAD
           make "${KATA_ASSET}-tarball"
           build_dir=$(readlink -f build)
           # store-artifact does not work with symlink
@@ -51,6 +52,7 @@ jobs:
           path: build
       - name: merge-artifacts
         run: |
+          git rev-parse --abbrev-ref HEAD
           make merge-builds
       - name: store-artifacts
         uses: actions/upload-artifact@v2
@@ -64,5 +66,6 @@ jobs:
       - uses: actions/checkout@v2
       - name: make kata-tarball
         run: |
+          git rev-parse --abbrev-ref HEAD
           make kata-tarball
           sudo make install-tarball
