@@ -1,6 +1,8 @@
 <img src="https://www.openstack.org/assets/kata/kata-vertical-on-white.png" width="150">
 
 # Kata Containers
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Ffidencio%2Fkata-containers.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Ffidencio%2Fkata-containers?ref=badge_shield)
+
 
 Welcome to Kata Containers!
 
@@ -21,6 +23,9 @@ advantages of VMs.
 
 The code is licensed under the Apache 2.0 license.
 See [the license file](LICENSE) for further details.
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Ffidencio%2Fkata-containers.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Ffidencio%2Fkata-containers?ref=badge_large)
 
 ## Platform support
 
