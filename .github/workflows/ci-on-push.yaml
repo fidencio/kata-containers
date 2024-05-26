@@ -1,9 +1,6 @@
 name: Kata Containers CI
 on:
-  pull_request_target:
-    branches:
-      - 'main'
-      - 'stable-*'
+  pull_request:
     types:
       # Adding 'labeled' to the list of activity types that trigger this event
       # (default: opened, synchronize, reopened) so that we can run this
@@ -12,7 +9,6 @@ on:
       - opened
       - synchronize
       - reopened
-      - labeled
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -20,7 +16,6 @@ concurrency:
 
 jobs:
   kata-containers-ci-on-push:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'ok-to-test') }}
     uses: ./.github/workflows/ci.yaml
     with:
       commit-hash: ${{ github.event.pull_request.head.sha }}

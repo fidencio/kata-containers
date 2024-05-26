@@ -28,40 +28,19 @@ jobs:
       matrix:
         asset:
           - agent
-          - agent-ctl
-          - cloud-hypervisor
-          - cloud-hypervisor-glibc
           - coco-guest-components
-          - firecracker
-          - genpolicy
-          - kata-ctl
-          - kata-manager
           - kernel
           - kernel-confidential
-          - kernel-dragonball-experimental
-          - kernel-nvidia-gpu
-          - kernel-nvidia-gpu-confidential
-          - nydus
-          - ovmf
-          - ovmf-sev
           - pause-image
           - qemu
-          - qemu-snp-experimental
-          - stratovirt
           - rootfs-image
           - rootfs-image-confidential
           - rootfs-initrd
           - rootfs-initrd-confidential
-          - rootfs-initrd-mariner
-          - runk
           - shim-v2
-          - trace-forwarder
           - virtiofsd
         stage:
           - ${{ inputs.stage }}
-        exclude:
-          - asset: cloud-hypervisor-glibc
-            stage: release
     steps:
       - name: Login to Kata Containers quay.io
         if: ${{ inputs.push-to-registry == 'yes' }}

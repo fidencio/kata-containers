@@ -1,4 +1,4 @@
-name: CI | Run kubernetes tests on IBM Cloud Z virtual server instance (zVSI)
+name: CI | Run kubernetes tests on GARM
 on:
   workflow_call:
     inputs:
@@ -29,38 +29,23 @@ jobs:
       matrix:
         vmm:
           - qemu
-        snapshotter:
-          - devmapper
-          - nydus
         k8s:
           - k3s
-        include:
-          - snapshotter: devmapper
-            pull-type: default
-            using-nfd: true
-            deploy-cmd: configure-snapshotter
-          - snapshotter: nydus
-            pull-type: guest-pull
-            using-nfd: false
-            deploy-cmd: deploy-snapshotter
-    runs-on: s390x-large
+          - k0s
+          - rke2
+        instance:
+          - ubuntu-latest
+    runs-on: ${{ matrix.instance }}
     env:
       DOCKER_REGISTRY: ${{ inputs.registry }}
       DOCKER_REPO: ${{ inputs.repo }}
       DOCKER_TAG: ${{ inputs.tag }}
       PR_NUMBER: ${{ inputs.pr-number }}
-      GH_PR_NUMBER: ${{ inputs.pr-number }}
-      KATA_HOST_OS: "ubuntu"
       KATA_HYPERVISOR: ${{ matrix.vmm }}
-      KUBERNETES: "k3s"
-      PULL_TYPE: ${{ matrix.pull-type }}
-      SNAPSHOTTER: ${{ matrix.snapshotter }}
-      USING_NFD: ${{ matrix.using-nfd }}
-      TARGET_ARCH: "s390x"
+      KUBERNETES: ${{ matrix.k8s }}
+      USING_NFD: "false"
+      K8S_TEST_HOST_TYPE: baremetal #run all tests
     steps:
-      - name: Take a pre-action for self-hosted runner
-        run: ${HOME}/script/pre_action.sh ubuntu-2204
-
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.commit-hash }}
@@ -75,19 +60,27 @@ jobs:
       - name: Deploy ${{ matrix.k8s }}
         run: bash tests/integration/kubernetes/gha-run.sh deploy-k8s
 
-      - name: Configure the ${{ matrix.snapshotter }} snapshotter
-        run: bash tests/integration/kubernetes/gha-run.sh ${{ matrix.deploy-cmd }}
-
       - name: Deploy Kata
         timeout-minutes: 10
-        run: bash tests/integration/kubernetes/gha-run.sh deploy-kata-zvsi
+        run: bash tests/integration/kubernetes/gha-run.sh deploy-kata-garm
 
+      - name: Install `bats`
+        run: bash tests/integration/kubernetes/gha-run.sh install-bats
+  
       - name: Run tests
-        timeout-minutes: 60
+        timeout-minutes: 45
         run: bash tests/integration/kubernetes/gha-run.sh run-tests
+  
+      - name: Collect artifacts ${{ matrix.vmm }}
+        run: bash tests/integration/kubernetes/gha-run.sh collect-artifacts
 
-      - name: Take a post-action
+      - name: Archive artifacts ${{ matrix.vmm }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-tests-with-containerd-${{ matrix.vmm }}-${{ matrix.k8s }}-${{ matrix.instance }}-${{ inputs.tag }}
+          path: /tmp/artifacts
+          retention-days: 1
+
+      - name: Delete kata-deploy
         if: always()
-        run: |
-          bash tests/integration/kubernetes/gha-run.sh cleanup-zvsi || true
-          ${HOME}/script/post_action.sh ubuntu-2204
+        run: bash tests/integration/kubernetes/gha-run.sh cleanup-garm
