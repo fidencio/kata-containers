@@ -37,7 +37,10 @@ jobs:
           - qemu-nvidia-gpu
         k8s:
           - kubeadm
-    runs-on: amd64-nvidia-a100
+        runner:
+          - amd64-nvidia-a100
+          - amd64-nvidia-h100-snp
+    runs-on: ${{ matrix.runner }}
     env:
       DOCKER_REGISTRY: ${{ inputs.registry }}
       DOCKER_REPO: ${{ inputs.repo }}
@@ -66,7 +69,7 @@ jobs:
       - name: Install `bats`
         run: bash tests/integration/kubernetes/gha-run.sh install-bats
 
-      - name: Run tests
+      - name: Run tests ${{ matrix.vmm }}
         timeout-minutes: 30
         run: bash tests/integration/kubernetes/gha-run.sh run-nv-tests
         env:
