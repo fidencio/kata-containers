@@ -27,8 +27,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance:
-          - "riscv-builder"
+        environment: [
+          { instance: riscv-builder },
+        ]
     uses: ./.github/workflows/build-checks-preview-riscv64.yaml
     with:
-      instance: ${{ matrix.instance }}
+      instance: ${{ matrix.environment.instance }}

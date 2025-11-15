@@ -62,13 +62,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component:
-          - runtime-rs
-        include:
-          - component: runtime-rs
-            command: "sudo -E env PATH=$PATH LIBC=gnu SUPPORT_VIRTUALIZATION=true make test"
-          - component: runtime-rs
-            component-path: src/dragonball
+        environment: [
+          { component: runtime-rs, command: "sudo -E env PATH=$PATH LIBC=gnu SUPPORT_VIRTUALIZATION=true make test", component-path: src/runtime-rs },
+          { component: runtime-rs, command: "",                                                                      component-path: src/dragonball },
+        ]
     steps:
       - name: Checkout the code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -87,14 +84,14 @@ jobs:
         run: |
           export PATH="$PATH:/usr/local/bin"
           ./tests/install_rust.sh
-      - name: Running `${{ matrix.command }}` for ${{ matrix.component }}
+      - name: Running `${{ matrix.environment.command }}` for ${{ matrix.environment.component }}
         run: |
           export PATH="$PATH:${HOME}/.cargo/bin"
           cd "${COMPONENT_PATH}"
           eval "${COMMAND}"
         env:
-          COMMAND: ${{ matrix.command }}
-          COMPONENT_PATH: ${{ matrix.component-path }}
+          COMMAND: ${{ matrix.environment.command }}
+          COMPONENT_PATH: ${{ matrix.environment.component-path }}
           RUST_BACKTRACE: "1"
           RUST_LIB_BACKTRACE: "0"
 
@@ -106,8 +103,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cmd:
-          - "make static-checks"
+        environment: [
+          { cmd: "make static-checks" },
+        ]
     env:
       GOPATH: ${{ github.workspace }}
     permissions:
@@ -147,7 +145,7 @@ jobs:
           "${GOPATH}/src/github.com/${GITHUB_REPOSITORY}/tests/install_regorus.sh"
       - name: Run check
         env:
-          CMD: ${{ matrix.cmd }}
+          CMD: ${{ matrix.environment.cmd }}
         run: |
           export PATH="${PATH}:${GOPATH}/bin"
           cd "${GOPATH}/src/github.com/${GITHUB_REPOSITORY}" && ${CMD}

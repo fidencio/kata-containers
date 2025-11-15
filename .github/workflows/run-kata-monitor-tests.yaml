@@ -21,24 +21,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vmm:
-          - qemu
-        container_engine:
-          - crio
-          - containerd
-        # TODO: enable when https://github.com/kata-containers/kata-containers/issues/9853 is fixed
-        #include:
-        #  - container_engine: containerd
-        #    containerd_version: lts
-        exclude:
+        environment: [
+          { vmm: qemu, container_engine: crio },
           # TODO: enable with containerd when https://github.com/kata-containers/kata-containers/issues/9761 is fixed
-          - container_engine: containerd
-            vmm: qemu
+          # TODO: enable when https://github.com/kata-containers/kata-containers/issues/9853 is fixed
+          # { vmm: qemu, container_engine: containerd, containerd_version: lts },
+        ]
     runs-on: ubuntu-22.04
     env:
-      CONTAINER_ENGINE: ${{ matrix.container_engine }}
-      #CONTAINERD_VERSION: ${{ matrix.containerd_version }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      CONTAINER_ENGINE: ${{ matrix.environment.container_engine }}
+      #CONTAINERD_VERSION: ${{ matrix.environment.containerd_version }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

@@ -411,7 +411,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        params: [
+        environment: [
           { containerd_version: lts,    vmm: clh              },
           { containerd_version: lts,    vmm: dragonball       },
           { containerd_version: lts,    vmm: qemu             },
@@ -422,7 +422,7 @@ jobs:
           { containerd_version: active, vmm: qemu             },
           { containerd_version: active, vmm: cloud-hypervisor },
           { containerd_version: active, vmm: qemu-runtime-rs  },
-         ]
+        ]
     uses: ./.github/workflows/run-cri-containerd-tests.yaml
     with:
       tarball-suffix: -${{ inputs.tag }}
@@ -430,8 +430,8 @@ jobs:
       target-branch: ${{ inputs.target-branch }}
       runner: ubuntu-22.04
       arch: amd64
-      containerd_version: ${{ matrix.params.containerd_version }}
-      vmm: ${{ matrix.params.vmm }}
+      containerd_version: ${{ matrix.environment.containerd_version }}
+      vmm: ${{ matrix.environment.vmm }}
 
   run-cri-containerd-s390x:
     if: ${{ inputs.skip-test != 'yes' }}
@@ -439,10 +439,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        params: [
+        environment: [
           { containerd_version: active, vmm: qemu            },
           { containerd_version: active, vmm: qemu-runtime-rs },
-         ]
+        ]
     uses: ./.github/workflows/run-cri-containerd-tests.yaml
     with:
       tarball-suffix: -${{ inputs.tag }}
@@ -450,8 +450,8 @@ jobs:
       target-branch: ${{ inputs.target-branch }}
       runner: s390x-large
       arch: s390x
-      containerd_version: ${{ matrix.params.containerd_version }}
-      vmm: ${{ matrix.params.vmm }}
+      containerd_version: ${{ matrix.environment.containerd_version }}
+      vmm: ${{ matrix.environment.vmm }}
 
   run-cri-containerd-tests-ppc64le:
     if: ${{ inputs.skip-test != 'yes' }}
@@ -459,9 +459,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        params: [
+        environment: [
           { containerd_version: active, vmm: qemu },
-         ]
+        ]
     uses: ./.github/workflows/run-cri-containerd-tests.yaml
     with:
       tarball-suffix: -${{ inputs.tag }}
@@ -469,8 +469,8 @@ jobs:
       target-branch: ${{ inputs.target-branch }}
       runner: ppc64le-small
       arch: ppc64le
-      containerd_version: ${{ matrix.params.containerd_version }}
-      vmm: ${{ matrix.params.vmm }}
+      containerd_version: ${{ matrix.environment.containerd_version }}
+      vmm: ${{ matrix.environment.vmm }}
 
   run-cri-containerd-tests-arm64:
     if: ${{ inputs.skip-test != 'yes' }}
@@ -478,9 +478,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        params: [
+        environment: [
           { containerd_version: active, vmm: qemu },
-         ]
+        ]
     uses: ./.github/workflows/run-cri-containerd-tests.yaml
     with:
       tarball-suffix: -${{ inputs.tag }}
@@ -488,5 +488,5 @@ jobs:
       target-branch: ${{ inputs.target-branch }}
       runner: arm64-non-k8s
       arch: arm64
-      containerd_version: ${{ matrix.params.containerd_version }}
-      vmm: ${{ matrix.params.vmm }}
+      containerd_version: ${{ matrix.environment.containerd_version }}
+      vmm: ${{ matrix.environment.vmm }}

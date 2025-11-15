@@ -30,18 +30,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vmm:
-          - qemu
-        k8s:
-          - kubeadm
+        environment: [
+          { vmm: qemu, k8s: kubeadm },
+        ]
     runs-on: arm64-k8s
     env:
       DOCKER_REGISTRY: ${{ inputs.registry }}
       DOCKER_REPO: ${{ inputs.repo }}
       DOCKER_TAG: ${{ inputs.tag }}
       GH_PR_NUMBER: ${{ inputs.pr-number }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
-      KUBERNETES: ${{ matrix.k8s }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
+      KUBERNETES: ${{ matrix.environment.k8s }}
       K8S_TEST_HOST_TYPE: all
       TARGET_ARCH: "aarch64"
     steps:
@@ -68,15 +67,15 @@ jobs:
         timeout-minutes: 30
         run: bash tests/integration/kubernetes/gha-run.sh run-tests
 
-      - name: Collect artifacts ${{ matrix.vmm }}
+      - name: Collect artifacts ${{ matrix.environment.vmm }}
         if: always()
         run: bash tests/integration/kubernetes/gha-run.sh collect-artifacts
         continue-on-error: true
 
-      - name: Archive artifacts ${{ matrix.vmm }}
+      - name: Archive artifacts ${{ matrix.environment.vmm }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: k8s-tests-${{ matrix.vmm }}-${{ matrix.k8s }}-${{ inputs.tag }}
+          name: k8s-tests-${{ matrix.environment.vmm }}-${{ matrix.environment.k8s }}-${{ inputs.tag }}
           path: /tmp/artifacts
           retention-days: 1
 

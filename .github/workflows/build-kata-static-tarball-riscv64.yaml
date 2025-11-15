@@ -34,9 +34,10 @@ jobs:
       attestations: write
     strategy:
       matrix:
-        asset:
-          - kernel
-          - virtiofsd
+        environment: [
+          { asset: kernel    },
+          { asset: virtiofsd },
+        ]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -50,15 +51,15 @@ jobs:
         env:
           TARGET_BRANCH: ${{ inputs.target-branch }}
 
-      - name: Build ${{ matrix.asset }}
+      - name: Build ${{ matrix.environment.asset }}
         run: |
           make "${KATA_ASSET}-tarball"
           build_dir=$(readlink -f build)
           # store-artifact does not work with symlink
           mkdir -p kata-build && cp "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.* kata-build/.
         env:
-          KATA_ASSET: ${{ matrix.asset }}
-          TAR_OUTPUT: ${{ matrix.asset }}.tar.gz
+          KATA_ASSET: ${{ matrix.environment.asset }}
+          TAR_OUTPUT: ${{ matrix.environment.asset }}.tar.gz
           PUSH_TO_REGISTRY: ${{ inputs.push-to-registry }}
           ARTEFACT_REGISTRY: ghcr.io
           ARTEFACT_REGISTRY_USERNAME: ${{ github.actor }}
@@ -66,10 +67,10 @@ jobs:
           TARGET_BRANCH: ${{ inputs.target-branch }}
           RELEASE: ${{ inputs.stage == 'release' && 'yes' || 'no' }}
 
-      - name: store-artifact ${{ matrix.asset }}
+      - name: store-artifact ${{ matrix.environment.asset }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: kata-artifacts-riscv64-${{ matrix.asset }}${{ inputs.tarball-suffix }}
-          path: kata-build/kata-static-${{ matrix.asset }}.tar.zst
+          name: kata-artifacts-riscv64-${{ matrix.environment.asset }}${{ inputs.tarball-suffix }}
+          path: kata-build/kata-static-${{ matrix.environment.asset }}.tar.zst
           retention-days: 3
           if-no-files-found: error

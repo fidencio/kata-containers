@@ -44,18 +44,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: tdx
-            vmm: qemu-tdx
-          - runner: sev-snp
-            vmm: qemu-snp
-    runs-on: ${{ matrix.runner }}
+        environment: [
+          { runner: tdx,     vmm: qemu-tdx },
+          { runner: sev-snp, vmm: qemu-snp },
+        ]
+    runs-on: ${{ matrix.environment.runner }}
     env:
       DOCKER_REGISTRY: ${{ inputs.registry }}
       DOCKER_REPO: ${{ inputs.repo }}
       DOCKER_TAG: ${{ inputs.tag }}
       GH_PR_NUMBER: ${{ inputs.pr-number }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
       KUBERNETES: "vanilla"
       KBS: "true"
       K8S_TEST_HOST_TYPE: "baremetal"
@@ -129,17 +128,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vmm:
-          - qemu-coco-dev
-          - qemu-coco-dev-runtime-rs
-        snapshotter:
-          - nydus
-        pull-type:
-          - guest-pull
-        include:
-          - pull-type: experimental-force-guest-pull
-            vmm: qemu-coco-dev
-            snapshotter: ""
+        environment: [
+          { vmm: qemu-coco-dev,            snapshotter: nydus, pull-type: guest-pull                    },
+          { vmm: qemu-coco-dev-runtime-rs, snapshotter: nydus, pull-type: guest-pull                    },
+          { vmm: qemu-coco-dev,            snapshotter: "",    pull-type: experimental-force-guest-pull },
+        ]
     runs-on: ubuntu-22.04
     permissions:
       id-token: write # Used for OIDC access to log into Azure
@@ -149,16 +142,16 @@ jobs:
       DOCKER_REPO: ${{ inputs.repo }}
       DOCKER_TAG: ${{ inputs.tag }}
       GH_PR_NUMBER: ${{ inputs.pr-number }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
       # Some tests rely on that variable to run (or not)
       KBS: "true"
       # Set the KBS ingress handler (empty string disables handling)
       KBS_INGRESS: "aks"
       KUBERNETES: "vanilla"
-      PULL_TYPE: ${{ matrix.pull-type }}
+      PULL_TYPE: ${{ matrix.environment.pull-type }}
       AUTHENTICATED_IMAGE_USER: ${{ vars.AUTHENTICATED_IMAGE_USER }}
       AUTHENTICATED_IMAGE_PASSWORD: ${{ secrets.AUTHENTICATED_IMAGE_PASSWORD }}
-      SNAPSHOTTER: ${{ matrix.snapshotter }}
+      SNAPSHOTTER: ${{ matrix.environment.snapshotter }}
       # Caution: current ingress controller used to expose the KBS service
       # requires much vCPUs, lefting only a few for the tests. Depending on the
       # host type chose it will result on the creation of a cluster with
@@ -217,9 +210,9 @@ jobs:
         timeout-minutes: 20
         run: bash tests/integration/kubernetes/gha-run.sh deploy-kata-aks
         env:
-          EXPERIMENTAL_FORCE_GUEST_PULL: ${{ env.PULL_TYPE == 'experimental-force-guest-pull' && env.KATA_HYPERVISOR || '' }}
-          USE_EXPERIMENTAL_SETUP_SNAPSHOTTER: ${{ env.SNAPSHOTTER == 'nydus' }}
-          AUTO_GENERATE_POLICY: ${{ env.PULL_TYPE == 'experimental-force-guest-pull' && 'no' || 'yes' }}
+          EXPERIMENTAL_FORCE_GUEST_PULL: ${{ matrix.environment.pull-type == 'experimental-force-guest-pull' && matrix.environment.vmm || '' }}
+          USE_EXPERIMENTAL_SETUP_SNAPSHOTTER: ${{ matrix.environment.snapshotter == 'nydus' }}
+          AUTO_GENERATE_POLICY: ${{ matrix.environment.pull-type == 'experimental-force-guest-pull' && 'no' || 'yes' }}
 
       - name: Deploy CoCo KBS
         timeout-minutes: 10
@@ -260,12 +253,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vmm:
-          - qemu-coco-dev
-        snapshotter:
-          - erofs
-        pull-type:
-          - default
+        environment: [
+          { vmm: qemu-coco-dev, snapshotter: erofs, pull-type: default },
+        ]
     runs-on: ubuntu-24.04
     environment: ci
     env:
@@ -273,7 +263,7 @@ jobs:
       DOCKER_REPO: ${{ inputs.repo }}
       DOCKER_TAG: ${{ inputs.tag }}
       GH_PR_NUMBER: ${{ inputs.pr-number }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
       # Some tests rely on that variable to run (or not)
       KBS: "false"
       # Set the KBS ingress handler (empty string disables handling)
@@ -281,8 +271,8 @@ jobs:
       KUBERNETES: "vanilla"
       CONTAINER_ENGINE: "containerd"
       CONTAINER_ENGINE_VERSION: "v2.2"
-      PULL_TYPE: ${{ matrix.pull-type }}
-      SNAPSHOTTER: ${{ matrix.snapshotter }}
+      PULL_TYPE: ${{ matrix.environment.pull-type }}
+      SNAPSHOTTER: ${{ matrix.environment.snapshotter }}
       USE_EXPERIMENTAL_SETUP_SNAPSHOTTER: "true"
       K8S_TEST_HOST_TYPE: "all"
       # We are skipping the auto generated policy tests for now,

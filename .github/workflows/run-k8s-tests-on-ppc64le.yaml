@@ -30,10 +30,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vmm:
-          - qemu
-        k8s:
-          - kubeadm
+        environment: [
+          { vmm: qemu, k8s: kubeadm },
+        ]
     runs-on: ppc64le-k8s
     env:
       DOCKER_REGISTRY: ${{ inputs.registry }}
@@ -41,8 +40,8 @@ jobs:
       DOCKER_TAG: ${{ inputs.tag }}
       GH_PR_NUMBER: ${{ inputs.pr-number }}
       GOPATH: ${{ github.workspace }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
-      KUBERNETES: ${{ matrix.k8s }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
+      KUBERNETES: ${{ matrix.environment.k8s }}
       TARGET_ARCH: "ppc64le"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

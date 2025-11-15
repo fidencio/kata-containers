@@ -27,10 +27,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance:
-          - "ubuntu-24.04-arm"
-          - "s390x"
-          - "ubuntu-24.04-ppc64le"
+        environment: [
+          { instance: ubuntu-24.04-arm     },
+          { instance: s390x                },
+          { instance: ubuntu-24.04-ppc64le },
+        ]
     uses: ./.github/workflows/build-checks.yaml
     with:
-      instance: ${{ matrix.instance }}
+      instance: ${{ matrix.environment.instance }}

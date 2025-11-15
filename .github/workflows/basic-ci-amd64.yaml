@@ -24,15 +24,18 @@ jobs:
       # all the tests due to a single flaky instance.
       fail-fast: false
       matrix:
-        containerd_version: ['active']
-        vmm: ['dragonball', 'cloud-hypervisor', 'qemu-runtime-rs']
+        environment: [
+          { containerd_version: active, vmm: dragonball },
+          { containerd_version: active, vmm: cloud-hypervisor },
+          { containerd_version: active, vmm: qemu-runtime-rs },
+        ]
     # TODO: enable me when https://github.com/containerd/containerd/issues/11640 is fixed
     if: false
     runs-on: ubuntu-22.04
     env:
-      CONTAINERD_VERSION: ${{ matrix.containerd_version }}
+      CONTAINERD_VERSION: ${{ matrix.environment.containerd_version }}
       GOPATH: ${{ github.workspace }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
       SANDBOXER: "shim"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -70,13 +73,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        containerd_version: ['lts', 'active']
-        vmm: ['clh', 'cloud-hypervisor', 'dragonball', 'qemu']
+        environment: [
+          { containerd_version: lts,    vmm: clh              },
+          { containerd_version: lts,    vmm: cloud-hypervisor },
+          { containerd_version: lts,    vmm: dragonball       },
+          { containerd_version: lts,    vmm: qemu             },
+          { containerd_version: active, vmm: clh              },
+          { containerd_version: active, vmm: cloud-hypervisor },
+          { containerd_version: active, vmm: dragonball       },
+          { containerd_version: active, vmm: qemu             },
+        ]
     runs-on: ubuntu-22.04
     env:
-      CONTAINERD_VERSION: ${{ matrix.containerd_version }}
+      CONTAINERD_VERSION: ${{ matrix.environment.containerd_version }}
       GOPATH: ${{ github.workspace }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
       SANDBOXER: "podsandbox"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -116,13 +127,19 @@ jobs:
       # all the tests due to a single flaky instance.
       fail-fast: false
       matrix:
-        containerd_version: ['lts', 'active']
-        vmm: ['clh', 'qemu', 'dragonball']
+        environment: [
+          { containerd_version: lts,    vmm: clh        },
+          { containerd_version: lts,    vmm: qemu       },
+          { containerd_version: lts,    vmm: dragonball },
+          { containerd_version: active, vmm: clh        },
+          { containerd_version: active, vmm: qemu       },
+          { containerd_version: active, vmm: dragonball },
+        ]
     runs-on: ubuntu-22.04
     env:
-      CONTAINERD_VERSION: ${{ matrix.containerd_version }}
+      CONTAINERD_VERSION: ${{ matrix.environment.containerd_version }}
       GOPATH: ${{ github.workspace }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -195,15 +212,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vmm:
-          - clh # cloud-hypervisor
-          - qemu
+        environment: [
+          { vmm: clh },
+          { vmm: qemu },
+        ]
     # TODO: enable me when https://github.com/kata-containers/kata-containers/issues/9763 is fixed
     # TODO: Transition to free runner (see #9940).
     if: false
     runs-on: garm-ubuntu-2204-smaller
     env:
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -240,9 +258,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vmm:
-          - clh
-          - qemu
+        environment: [
+          { vmm: clh  },
+          { vmm: qemu },
+        ]
     # TODO: enable with clh when https://github.com/kata-containers/kata-containers/issues/9764 is fixed
     # TODO: enable with qemu when https://github.com/kata-containers/kata-containers/issues/9851 is fixed
     # TODO: Transition to free runner (see #9940).
@@ -250,7 +269,7 @@ jobs:
     runs-on: garm-ubuntu-2304
     env:
       GOPATH: ${{ github.workspace }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -287,14 +306,15 @@ jobs:
       # all due to a single flaky instance.
       fail-fast: false
       matrix:
-        vmm:
-          - clh
-          - dragonball
-          - qemu
-          - cloud-hypervisor
+        environment: [
+          { vmm: clh              },
+          { vmm: dragonball       },
+          { vmm: qemu             },
+          { vmm: cloud-hypervisor },
+        ]
     runs-on: ubuntu-22.04
     env:
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -327,15 +347,15 @@ jobs:
         timeout-minutes: 5
         run: bash tests/integration/nerdctl/gha-run.sh run
 
-      - name: Collect artifacts ${{ matrix.vmm }}
+      - name: Collect artifacts ${{ matrix.environment.vmm }}
         if: always()
         run: bash tests/integration/nerdctl/gha-run.sh collect-artifacts
         continue-on-error: true
 
-      - name: Archive artifacts ${{ matrix.vmm }}
+      - name: Archive artifacts ${{ matrix.environment.vmm }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: nerdctl-tests-garm-${{ matrix.vmm }}
+          name: nerdctl-tests-garm-${{ matrix.environment.vmm }}
           path: /tmp/artifacts
           retention-days: 1
 

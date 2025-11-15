@@ -14,10 +14,10 @@ jobs:
       matrix:
         environment: [
           { test-type: multi-snapshotter, containerd: v2.2 },
-          { test-type: force-guest-pull, containerd: v1.7 },
-          { test-type: force-guest-pull, containerd: v2.0 },
-          { test-type: force-guest-pull, containerd: v2.1 },
-          { test-type: force-guest-pull, containerd: v2.2 },
+          { test-type: force-guest-pull,  containerd: v1.7 },
+          { test-type: force-guest-pull,  containerd: v2.0 },
+          { test-type: force-guest-pull,  containerd: v2.1 },
+          { test-type: force-guest-pull,  containerd: v2.2 },
         ]
     env:
       # I don't want those to be inside double quotes, so I'm deliberately ignoring the double quotes here.

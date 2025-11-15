@@ -33,36 +33,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        snapshotter:
-          - overlayfs
-          - devmapper
-          - nydus
-        vmm:
-          - qemu
-          - qemu-runtime-rs
-          - qemu-coco-dev
-        k8s:
-          - kubeadm
-        include:
-          - snapshotter: devmapper
-            pull-type: default
-            deploy-cmd: configure-snapshotter
-          - snapshotter: nydus
-            pull-type: guest-pull
-            deploy-cmd: deploy-snapshotter
-        exclude:
-          - snapshotter: overlayfs
-            vmm: qemu
-          - snapshotter: overlayfs
-            vmm: qemu-coco-dev
-          - snapshotter: devmapper
-            vmm: qemu-runtime-rs
-          - snapshotter: devmapper
-            vmm: qemu-coco-dev
-          - snapshotter: nydus
-            vmm: qemu
-          - snapshotter: nydus
-            vmm: qemu-runtime-rs
+        environment: [
+          { snapshotter: overlayfs, vmm: qemu-runtime-rs, k8s: kubeadm, pull-type: "",         deploy-cmd: "" },
+          { snapshotter: devmapper, vmm: qemu,            k8s: kubeadm, pull-type: default,    deploy-cmd: configure-snapshotter },
+          { snapshotter: nydus,     vmm: qemu-coco-dev,   k8s: kubeadm, pull-type: guest-pull, deploy-cmd: deploy-snapshotter },
+        ]
     runs-on: s390x-large
     env:
       DOCKER_REGISTRY: ${{ inputs.registry }}
@@ -70,10 +45,10 @@ jobs:
       DOCKER_TAG: ${{ inputs.tag }}
       GH_PR_NUMBER: ${{ inputs.pr-number }}
       KATA_HOST_OS: "ubuntu"
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
-      KUBERNETES: ${{ matrix.k8s }}
-      PULL_TYPE: ${{ matrix.pull-type }}
-      SNAPSHOTTER: ${{ matrix.snapshotter }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
+      KUBERNETES: ${{ matrix.environment.k8s }}
+      PULL_TYPE: ${{ matrix.environment.pull-type }}
+      SNAPSHOTTER: ${{ matrix.environment.snapshotter }}
       TARGET_ARCH: "s390x"
       AUTHENTICATED_IMAGE_USER: ${{ vars.AUTHENTICATED_IMAGE_USER }}
       AUTHENTICATED_IMAGE_PASSWORD: ${{ secrets.AUTHENTICATED_IMAGE_PASSWORD }}
@@ -92,21 +67,21 @@ jobs:
 
       - name: Set SNAPSHOTTER to empty if overlayfs
         run: echo "SNAPSHOTTER=" >> "$GITHUB_ENV"
-        if: ${{ matrix.snapshotter == 'overlayfs' }}
+        if: ${{ matrix.environment.snapshotter == 'overlayfs' }}
 
       - name: Set KBS and KBS_INGRESS if qemu-coco-dev
         run: |
           echo "KBS=true" >> "$GITHUB_ENV"
           echo "KBS_INGRESS=nodeport" >> "$GITHUB_ENV"
-        if: ${{ matrix.vmm == 'qemu-coco-dev' }}
+        if: ${{ matrix.environment.vmm == 'qemu-coco-dev' }}
 
       # qemu-runtime-rs only works with overlayfs
       # See: https://github.com/kata-containers/kata-containers/issues/10066
-      - name: Configure the ${{ matrix.snapshotter }} snapshotter
+      - name: Configure the ${{ matrix.environment.snapshotter }} snapshotter
         env:
-          DEPLOY_CMD: ${{ matrix.deploy-cmd }}
+          DEPLOY_CMD: ${{ matrix.environment.deploy-cmd }}
         run: bash tests/integration/kubernetes/gha-run.sh "${DEPLOY_CMD}"
-        if: ${{ matrix.snapshotter != 'overlayfs' }}
+        if: ${{ matrix.environment.snapshotter != 'overlayfs' }}
 
       - name: Deploy Kata
         timeout-minutes: 20
@@ -115,17 +90,17 @@ jobs:
       - name: Uninstall previous `kbs-client`
         timeout-minutes: 10
         run: bash tests/integration/kubernetes/gha-run.sh uninstall-kbs-client
-        if: ${{ matrix.vmm == 'qemu-coco-dev' }}
+        if: ${{ matrix.environment.vmm == 'qemu-coco-dev' }}
 
       - name: Deploy CoCo KBS
         timeout-minutes: 10
         run: bash tests/integration/kubernetes/gha-run.sh deploy-coco-kbs
-        if: ${{ matrix.vmm == 'qemu-coco-dev' }}
+        if: ${{ matrix.environment.vmm == 'qemu-coco-dev' }}
 
       - name: Install `kbs-client`
         timeout-minutes: 10
         run: bash tests/integration/kubernetes/gha-run.sh install-kbs-client
-        if: ${{ matrix.vmm == 'qemu-coco-dev' }}
+        if: ${{ matrix.environment.vmm == 'qemu-coco-dev' }}
 
       - name: Run tests
         timeout-minutes: 60

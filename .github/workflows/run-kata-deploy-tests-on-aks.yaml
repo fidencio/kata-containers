@@ -37,16 +37,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        host_os:
-          - ubuntu
-        vmm:
-          - clh
-          - dragonball
-          - qemu
-          - qemu-runtime-rs
-        include:
-          - host_os: cbl-mariner
-            vmm: clh
+        environment: [
+          { host_os: ubuntu,      vmm: clh             },
+          { host_os: ubuntu,      vmm: dragonball      },
+          { host_os: ubuntu,      vmm: qemu            },
+          { host_os: ubuntu,      vmm: qemu-runtime-rs },
+          { host_os: cbl-mariner, vmm: clh             },
+        ]
     runs-on: ubuntu-22.04
     environment: ci
     permissions:
@@ -56,8 +53,8 @@ jobs:
       DOCKER_REPO: ${{ inputs.repo }}
       DOCKER_TAG: ${{ inputs.tag }}
       GH_PR_NUMBER: ${{ inputs.pr-number }}
-      KATA_HOST_OS: ${{ matrix.host_os }}
-      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      KATA_HOST_OS: ${{ matrix.environment.host_os }}
+      KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
       KUBERNETES: "vanilla"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
