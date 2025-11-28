@@ -70,7 +70,7 @@ jobs:
           path: kata-artifacts
 
       - name: Install kata
-        run: bash tests/integration/kubernetes/gha-run.sh install-kata-tools kata-artifacts
+        run: bash tests/integration/kubernetes/gha-run.sh install-kata-tools kata-tools-artifacts
 
       - name: Uninstall previous `kbs-client`
         if: matrix.environment.name != 'nvidia-gpu'

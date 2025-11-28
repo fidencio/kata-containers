@@ -367,8 +367,10 @@ jobs:
           name: kata-static-tarball-amd64${{ inputs.tarball-suffix }}
           path: kata-artifacts
 
-      - name: Install kata
-        run: bash tests/functional/kata-agent-apis/gha-run.sh install-kata kata-artifacts
+      - name: Install kata-tools & kata
+        run: | 
+          bash tests/functional/kata-agent-apis/gha-run.sh install-kata-tools kata-tools-artifacts
+          bash tests/functional/kata-agent-apis/gha-run.sh install-kata kata-artifacts
 
       - name: Run kata agent api tests with agent-ctl
         run: bash tests/functional/kata-agent-apis/gha-run.sh run
