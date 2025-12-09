@@ -1,0 +1,149 @@
+name: CI | Nydus-snapshotter install/uninstall cycle test
+on:
+  #  schedule:
+  #    - cron: "30 */1 * * *"  # Every hour, offset by 30min
+  workflow_dispatch:
+
+permissions: {}
+
+# Install/uninstall cycle test for nydus-snapshotter.
+# This test is designed to potentially trigger issue #680 (missing parent bucket)
+# by simulating the scenario where nydus-snapshotter is reinstalled while
+# containerd still has references to old snapshots.
+#
+# The test flow:
+# 1. Baseline: verify runc works
+# 2. Deploy Kata + nydus, run Kata pod (creates nydus snapshots)
+# 3. Run runc pod (mixed workload)
+# 4. Uninstall Kata (wipes nydus.db but containerd keeps metadata)
+# 5. Run runc pod (post-uninstall)
+# 6. Reinstall Kata (fresh nydus.db)
+# 7. Run Kata pod - may trigger issue #680 if containerd references old snapshots
+jobs:
+  install-cycle-test:
+    name: install-cycle-${{ matrix.environment.variant }}
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [
+          { variant: patched, runner: nydus-ephemeral-patched, kata-deploy-tag: nydus-latest-patched },
+          { variant: non-patched, runner: nydus-ephemeral-non-patched, kata-deploy-tag: nydus-latest-non-patched },
+        ]
+    runs-on: ${{ matrix.environment.runner }}
+    env:
+      KATA_HYPERVISOR: qemu-coco-dev
+      KUBERNETES: vanilla
+      SNAPSHOTTER: nydus
+      USE_EXPERIMENTAL_SETUP_SNAPSHOTTER: "true"
+      DOCKER_TAG: ${{ matrix.environment.kata-deploy-tag }}
+      # Note: Images must have basic shell utilities (uname). Distroless/scratch images won't work.
+      # Using SHA256 digests for reproducibility.
+      IMAGES_LIST: quay.io/mongodb/mongodb-community-server@sha256:8b73733842da21b6bbb6df4d7b2449229bb3135d2ec8c6880314d88205772a11 ghcr.io/edgelesssys/redis@sha256:ecb0a964c259a166a1eb62f0eb19621d42bd1cce0bc9bb0c71c828911d4ba93d
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Rotate the journal
+        run: sudo journalctl --rotate --vacuum-time 1s
+
+      ###########################################
+      # Phase 1: Baseline - runc works
+      ###########################################
+      - name: "Phase 1: Run runc pod (baseline)"
+        run: |
+          echo "=== Phase 1: Verifying runc/overlayfs baseline ==="
+          bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh run-runc-pods baseline
+
+      ###########################################
+      # Phase 2: Install Kata + nydus
+      ###########################################
+      - name: "Phase 2: Deploy Kata Containers"
+        run: bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh deploy-kata
+
+      - name: "Phase 2: Adjust Kata configuration"
+        run: bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh adjust-config
+
+      ###########################################
+      # Phase 3: Run Kata pod (creates nydus snapshots)
+      ###########################################
+      - name: "Phase 3: Run Kata pod"
+        run: |
+          echo "=== Phase 3: Running pod with Kata (nydus snapshotter) ==="
+          bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh run-kata-pods kata-first kata-qemu-coco-dev
+
+      ###########################################
+      # Phase 4: Run runc pod (mixed workload)
+      ###########################################
+      - name: "Phase 4: Run runc pod (mixed workload)"
+        run: |
+          echo "=== Phase 4: Running pod with runc (overlayfs) ==="
+          bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh run-runc-pods runc-mixed
+
+      - name: "Check for issues after Phase 4"
+        run: |
+          echo "=== Checking logs after initial Kata + runc workload ==="
+          bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh check-issues false || true
+
+      ###########################################
+      # Phase 5: Uninstall Kata (WIPES nydus DB)
+      ###########################################
+      - name: "Phase 5: Uninstall Kata (wipes nydus DB)"
+        run: |
+          echo "=== Phase 5: Uninstalling Kata (this wipes nydus.db) ==="
+          bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh cleanup-kata
+
+      ###########################################
+      # Phase 6: Run runc pod (containerd still has snapshot refs)
+      ###########################################
+      - name: "Phase 6: Run runc pod (post-uninstall)"
+        run: |
+          echo "=== Phase 6: Running runc pod after Kata uninstall ==="
+          echo "(containerd may still have snapshot references from Phase 3)"
+          bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh run-runc-pods runc-post-uninstall
+
+      ###########################################
+      # Phase 7: Reinstall Kata (FRESH nydus DB)
+      ###########################################
+      - name: "Phase 7: Reinstall Kata (fresh nydus DB)"
+        run: |
+          echo "=== Phase 7: Reinstalling Kata (fresh nydus.db) ==="
+          bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh deploy-kata
+
+      - name: "Phase 7: Adjust Kata configuration (again)"
+        run: bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh adjust-config
+
+      ###########################################
+      # Phase 8: Run Kata pod - may trigger issue #680
+      ###########################################
+      - name: "Phase 8: Run Kata pod after reinstall"
+        run: |
+          echo "=== Phase 8: Running Kata pod after reinstall ==="
+          echo ""
+          echo "This phase may trigger issue #680 if:"
+          echo "- containerd still has snapshot references from Phase 3"
+          echo "- nydus (fresh DB) doesn't know about those parents"
+          echo ""
+          echo "Expected behavior:"
+          echo "- PATCHED: lazy recovery should kick in and succeed"
+          echo "- NON-PATCHED: may fail with 'missing parent bucket: not found'"
+          echo ""
+          bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh run-kata-pods kata-after-reinstall kata-qemu-coco-dev
+
+      ###########################################
+      # Check for known issues
+      ###########################################
+      - name: Check for known issues in logs
+        if: always()
+        run: bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh check-issues true
+
+      ###########################################
+      # Cleanup
+      ###########################################
+      - name: Cleanup
+        if: always()
+        run: bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh cleanup-kata
+
+      - name: Collect full logs on failure
+        if: failure()
+        run: bash tests/integration/kubernetes/nydus_snapshotter_battle_tests.sh collect-logs
