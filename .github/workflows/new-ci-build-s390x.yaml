@@ -46,10 +46,7 @@ jobs:
           PUSH_TO_REGISTRY: no
           RELEASE: no
           CI_HKD_PATH: ${{ secrets.CI_HKD_PATH }}
-        run: |
-          make "${KATA_ASSET}-tarball"
-          build_dir=$(readlink -f build)
-          mkdir -p kata-build && cp "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.* kata-build/.
+        run: ./ci/gha-run-ci.sh build-asset
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

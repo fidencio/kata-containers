@@ -27,6 +27,11 @@ jobs:
       head-sha: ${{ steps.check.outputs.head-sha }}
       run-id: ${{ steps.check.outputs.run-id }}
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
       - name: Check workflow trigger
         id: check
         env:
@@ -35,22 +40,7 @@ jobs:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          echo "Workflow conclusion: ${WORKFLOW_CONCLUSION}"
-          echo "Workflow event: ${WORKFLOW_EVENT}"
-          echo "PR number: ${PR_NUMBER}"
-          echo "Head SHA: ${HEAD_SHA}"
-
-          if [[ "${WORKFLOW_CONCLUSION}" == "success" && "${WORKFLOW_EVENT}" == "pull_request" && -n "${PR_NUMBER}" ]]; then
-            {
-              echo "should-publish=true"
-              echo "pr-number=${PR_NUMBER}"
-              echo "head-sha=${HEAD_SHA}"
-              echo "run-id=${RUN_ID}"
-            } >> "${GITHUB_OUTPUT}"
-          else
-            echo "should-publish=false" >> "${GITHUB_OUTPUT}"
-          fi
+        run: ./ci/gha-run-ci.sh check-workflow-trigger
 
   publish-amd64:
     name: Publish amd64 payload
@@ -202,12 +192,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.gate-type2a-tests.outputs.pr-number }}
           HEAD_SHA: ${{ needs.gate-type2a-tests.outputs.head-sha }}
+          TAG: ${{ needs.gate-type2a-tests.outputs.pr-number }}-${{ needs.gate-type2a-tests.outputs.head-sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          TAG="${PR_NUMBER}-${HEAD_SHA}"
-          gh api "repos/${GITHUB_REPOSITORY}/dispatches" \
-            --method POST \
-            -f event_type="new-ci-protected-tests" \
-            -f "client_payload[pr_number]=${PR_NUMBER}" \
-            -f "client_payload[head_sha]=${HEAD_SHA}" \
-            -f "client_payload[tag]=${TAG}"
+        run: ./ci/gha-run-ci.sh trigger-protected-tests

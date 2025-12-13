@@ -16,38 +16,42 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
+      actions: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.client_payload.head_sha }}
           persist-credentials: false
 
-      - uses: ./.github/actions/new-ci-trigger-arch-build
-        with:
-          arch: s390x
-          pr-number: ${{ github.event.client_payload.pr_number }}
-          head-sha: ${{ github.event.client_payload.head_sha }}
-          tag: ${{ github.event.client_payload.tag }}-s390x
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Trigger s390x build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+          TAG: ${{ github.event.client_payload.tag }}-s390x
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./ci/gha-run-ci.sh trigger-arch-build s390x
 
   trigger-ppc64le-build:
     name: Trigger ppc64le build
     runs-on: ubuntu-22.04
     permissions:
       contents: read
+      actions: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.client_payload.head_sha }}
           persist-credentials: false
 
-      - uses: ./.github/actions/new-ci-trigger-arch-build
-        with:
-          arch: ppc64le
-          pr-number: ${{ github.event.client_payload.pr_number }}
-          head-sha: ${{ github.event.client_payload.head_sha }}
-          tag: ${{ github.event.client_payload.tag }}-ppc64le
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Trigger ppc64le build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+          TAG: ${{ github.event.client_payload.tag }}-ppc64le
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./ci/gha-run-ci.sh trigger-arch-build ppc64le
 
   run-k8s-tests-on-aks:
     name: Run K8s tests on AKS
@@ -69,11 +73,12 @@ jobs:
           TARGET_BRANCH: main
 
       - name: Run AKS tests
-        run: echo "AKS tests would run here"
         env:
+          TEST_TYPE: aks
           DOCKER_REGISTRY: ghcr.io
           DOCKER_REPO: ${{ github.repository_owner }}/kata-deploy-ci
           DOCKER_TAG: ${{ github.event.client_payload.tag }}-amd64
+        run: ./ci/gha-run-ci.sh run-protected-tests
 
   run-k8s-tests-on-arm64:
     name: Run K8s tests on arm64
@@ -94,11 +99,12 @@ jobs:
           TARGET_BRANCH: main
 
       - name: Run arm64 K8s tests
-        run: echo "arm64 K8s tests would run here"
         env:
+          TEST_TYPE: arm64
           DOCKER_REGISTRY: ghcr.io
           DOCKER_REPO: ${{ github.repository_owner }}/kata-deploy-ci
           DOCKER_TAG: ${{ github.event.client_payload.tag }}-arm64
+        run: ./ci/gha-run-ci.sh run-protected-tests
 
   run-kata-coco-tests:
     name: Run CoCo tests
@@ -127,12 +133,13 @@ jobs:
           TARGET_BRANCH: main
 
       - name: Run CoCo tests
-        run: echo "CoCo tests would run here"
         env:
+          TEST_TYPE: coco
           DOCKER_REGISTRY: ghcr.io
           DOCKER_REPO: ${{ github.repository_owner }}/kata-deploy-ci
           DOCKER_TAG: ${{ github.event.client_payload.tag }}-amd64
           KATA_HYPERVISOR: ${{ matrix.vmm }}
+        run: ./ci/gha-run-ci.sh run-protected-tests
 
   run-k8s-tests-on-nvidia-gpu:
     name: Run K8s tests on NVIDIA GPU
@@ -150,6 +157,7 @@ jobs:
     permissions:
       contents: read
     env:
+      TEST_TYPE: nvidia-gpu
       DOCKER_REGISTRY: ghcr.io
       DOCKER_REPO: ${{ github.repository_owner }}/kata-deploy-ci
       DOCKER_TAG: ${{ github.event.client_payload.tag }}-amd64
@@ -169,4 +177,4 @@ jobs:
           TARGET_BRANCH: main
 
       - name: Run NVIDIA GPU tests
-        run: echo "NVIDIA GPU tests would run here"
+        run: ./ci/gha-run-ci.sh run-protected-tests
