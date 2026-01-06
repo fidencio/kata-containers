@@ -225,6 +225,8 @@ async fn configure_shim_config(config: &Config, shim: &str) -> Result<()> {
         adjust_installation_prefix(config, shim, &kata_config_file).await?;
     }
 
+    configure_devmapper_snapshotter(config, shim, &kata_config_file).await?;
+
     Ok(())
 }
 
@@ -485,6 +487,35 @@ async fn configure_hypervisor_annotations(
 
 async fn configure_experimental_force_guest_pull(config_file: &Path) -> Result<()> {
     set_toml_bool(config_file, "runtime.experimental_force_guest_pull", true)
+}
+
+async fn configure_devmapper_snapshotter(
+    config: &Config,
+    shim: &str,
+    config_file: &Path,
+) -> Result<()> {
+    let mapping = match config.snapshotter_handler_mapping_for_arch.as_ref() {
+        Some(m) if !m.is_empty() => m,
+        _ => return Ok(()),
+    };
+
+    // Check if this shim uses devmapper snapshotter
+    let uses_devmapper = mapping.split(',').any(|m| {
+        let parts: Vec<&str> = m.split(':').collect();
+        parts[0] == shim && parts[1] == "devmapper"
+    });
+
+    if !uses_devmapper {
+        return Ok(());
+    }
+
+    let hypervisor_name = get_hypervisor_name(shim)?;
+    let disable_block_device_use_path =
+        format!("hypervisor.{hypervisor_name}.disable_block_device_use");
+
+    set_toml_bool(config_file, &disable_block_device_use_path, false)?;
+
+    Ok(())
 }
 
 async fn configure_tdx(config: &Config, _shim: &str, config_file: &Path) -> Result<()> {
