@@ -990,6 +990,13 @@ function configure_containerd_runtime() {
 			fi
 
 			tomlq -i -t $(printf '%s.snapshotter="%s"' ${runtime_table} ${value}) ${configuration_file}
+
+			if [[ "${value}" == "devmapper" ]]; then
+				local hypervisor="${shim}"
+				[[ "${shim}" =~ ^(qemu|qemu-runtime-rs|qemu-snp|qemu-se|qemu-se-runtime-rs|qemu-coco-dev|qemu-coco-dev-runtime-rs|qemu-nvidia-gpu)$ ]] && hypervisor="qemu"
+				tomlq -i -t $(printf 'hypervisor.%s.disable_block_device_use = false' ${hypervisor}) ${runtime_config_path}
+			fi
+
 			break
 		done
 	fi
