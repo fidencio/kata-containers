@@ -366,20 +366,22 @@ async fn configure_no_proxy(config: &Config, shim: &str, config_file: &Path) -> 
     Ok(())
 }
 
-/// Set a TOML boolean value to "true" if it's not already "true"
-/// Reads the current value (defaulting to "false" if not found), and if it's not "true",
-/// logs the update and sets it to "true".
-fn set_toml_bool_to_true(config_file: &Path, path: &str) -> Result<()> {
+/// Set a TOML boolean value if it's not already set to the desired value.
+/// Reads the current value, and if it differs from desired, logs the update and sets it.
+fn set_toml_bool(config_file: &Path, path: &str, value: bool) -> Result<()> {
+    let value_str = if value { "true" } else { "false" };
+    let default_str = if value { "false" } else { "true" };
     let current_value = toml_utils::get_toml_value(config_file, path)
-        .unwrap_or_else(|_| "false".to_string());
-    if current_value != "true" {
+        .unwrap_or_else(|_| default_str.to_string());
+    if current_value != value_str {
         log::debug!(
-            "Updating {} in {}: old=\"{}\" new=\"true\"",
+            "Updating {} in {}: old=\"{}\" new=\"{}\"",
             path,
             config_file.display(),
-            current_value
+            current_value,
+            value_str
         );
-        toml_utils::set_toml_value(config_file, path, "true")?;
+        toml_utils::set_toml_value(config_file, path, value_str)?;
     }
     Ok(())
 }
@@ -388,13 +390,13 @@ async fn configure_debug(config_file: &Path, shim: &str) -> Result<()> {
     let hypervisor_name = get_hypervisor_name(shim)?;
 
     let hypervisor_enable_debug_path = format!("hypervisor.{hypervisor_name}.enable_debug");
-    set_toml_bool_to_true(config_file, &hypervisor_enable_debug_path)?;
+    set_toml_bool(config_file, &hypervisor_enable_debug_path, true)?;
 
-    set_toml_bool_to_true(config_file, "runtime.enable_debug")?;
+    set_toml_bool(config_file, "runtime.enable_debug", true)?;
 
-    set_toml_bool_to_true(config_file, "agent.kata.debug_console_enabled")?;
+    set_toml_bool(config_file, "agent.kata.debug_console_enabled", true)?;
 
-    set_toml_bool_to_true(config_file, "agent.kata.enable_debug")?;
+    set_toml_bool(config_file, "agent.kata.enable_debug", true)?;
 
     let kernel_params_path = format!("hypervisor.{hypervisor_name}.kernel_params");
     let current_params =
@@ -482,7 +484,7 @@ async fn configure_hypervisor_annotations(
 }
 
 async fn configure_experimental_force_guest_pull(config_file: &Path) -> Result<()> {
-    set_toml_bool_to_true(config_file, "runtime.experimental_force_guest_pull")
+    set_toml_bool(config_file, "runtime.experimental_force_guest_pull", true)
 }
 
 async fn configure_tdx(config: &Config, _shim: &str, config_file: &Path) -> Result<()> {
@@ -716,7 +718,7 @@ async fn configure_mariner(config: &Config) -> Result<()> {
 
     let static_resource_mgmt_path =
         format!("hypervisor.{mariner_hypervisor_name}.static_sandbox_resource_mgmt");
-    set_toml_bool_to_true(config_file, &static_resource_mgmt_path)?;
+    set_toml_bool(config_file, &static_resource_mgmt_path, true)?;
 
     let clh_path = format!("{}/bin/cloud-hypervisor-glibc", config.dest_dir);
     let valid_paths_field = format!("hypervisor.{mariner_hypervisor_name}.valid_hypervisor_paths");
