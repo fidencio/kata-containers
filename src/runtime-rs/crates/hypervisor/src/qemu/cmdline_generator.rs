@@ -199,6 +199,10 @@ impl Kernel {
             if config.disable_guest_selinux { 0 } else { 1 }
         )));
 
+        // Add arm64-specific kernel parameters
+        #[cfg(target_arch = "aarch64")]
+        kernel_params.append(&mut KernelParams::from_string("iommu.passthrough=0"));
+
         Ok(Kernel {
             path: config.boot_info.kernel.clone(),
             initrd_path: config.boot_info.initrd.clone(),
@@ -523,6 +527,7 @@ impl Machine {
         self
     }
 
+    #[cfg(not(target_arch = "aarch64"))]
     fn set_kernel_irqchip(&mut self, kernel_irqchip: &str) -> &mut Self {
         self.kernel_irqchip = Some(kernel_irqchip.to_owned());
         self
@@ -1551,6 +1556,7 @@ impl ToQemuParams for DeviceRng {
     }
 }
 
+#[cfg(not(target_arch = "aarch64"))]
 #[derive(Debug)]
 struct DeviceIntelIommu {
     intremap: bool,
@@ -1558,6 +1564,7 @@ struct DeviceIntelIommu {
     caching_mode: bool,
 }
 
+#[cfg(not(target_arch = "aarch64"))]
 impl DeviceIntelIommu {
     fn new() -> DeviceIntelIommu {
         DeviceIntelIommu {
@@ -1568,6 +1575,7 @@ impl DeviceIntelIommu {
     }
 }
 
+#[cfg(not(target_arch = "aarch64"))]
 #[async_trait]
 impl ToQemuParams for DeviceIntelIommu {
     async fn qemu_params(&self) -> Result<Vec<String>> {
@@ -2296,14 +2304,24 @@ impl<'a> QemuCmdLine<'a> {
     }
 
     fn add_iommu(&mut self) {
-        let dev_iommu = DeviceIntelIommu::new();
-        self.devices.push(Box::new(dev_iommu));
+        // vIOMMU is not supported on arm64
+        #[cfg(target_arch = "aarch64")]
+        {
+            warn!(sl!(), "vIOMMU is not supported on aarch64, ignoring");
+            return;
+        }
 
-        self.kernel
-            .params
-            .append(&mut KernelParams::from_string("intel_iommu=on iommu=pt"));
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let dev_iommu = DeviceIntelIommu::new();
+            self.devices.push(Box::new(dev_iommu));
 
-        self.machine.set_kernel_irqchip("split");
+            self.kernel
+                .params
+                .append(&mut KernelParams::from_string("intel_iommu=on iommu=pt"));
+
+            self.machine.set_kernel_irqchip("split");
+        }
     }
 
     fn add_bridges(&mut self, count: u32) {
