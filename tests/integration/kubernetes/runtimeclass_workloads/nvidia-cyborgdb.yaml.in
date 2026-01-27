@@ -1,0 +1,74 @@
+# Copyright (c) 2026 NVIDIA Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${POD_NAME_CYBORGDB}
+  labels:
+    app: ${POD_NAME_CYBORGDB}
+spec:
+  restartPolicy: Never
+  runtimeClassName: kata
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+    fsGroup: 0
+  containers:
+  - name: ${POD_NAME_CYBORGDB}
+    image: cyborginc/cyborgdb-service:latest
+    ports:
+      - containerPort: 8000
+        name: http
+    livenessProbe:
+      httpGet:
+        path: /v1/health
+        port: http
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 1
+      successThreshold: 1
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: /v1/health
+        port: http
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 1
+      successThreshold: 1
+      failureThreshold: 3
+    startupProbe:
+      httpGet:
+        path: /v1/health
+        port: http
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 1
+      successThreshold: 1
+      failureThreshold: 60
+    env:
+      - name: CYBORGDB_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: cyborgdb-api-key
+            key: api-key
+      - name: GPU_OPERATIONS
+        value: "all"
+      - name: NVIDIA_VISIBLE_DEVICES
+        value: "all"
+    resources:
+      limits:
+        nvidia.com/pgpu: "1"
+        cpu: "16"
+        memory: "16Gi"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cyborgdb-api-key
+type: Opaque
+data:
+  api-key: "${CYBORGDB_API_KEY_BASE64}"
