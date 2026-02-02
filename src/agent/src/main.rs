@@ -57,6 +57,7 @@ mod sandbox;
 mod signal;
 mod storage;
 mod uevent;
+mod user_resolution;
 mod util;
 mod version;
 mod watcher;

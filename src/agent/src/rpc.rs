@@ -84,6 +84,8 @@ use crate::tracer::extract_carrier_from_ttrpc;
 
 #[cfg(feature = "agent-policy")]
 use crate::policy::{do_set_policy, is_allowed};
+use crate::user_resolution;
+use kata_types::mount::KATA_VIRTUAL_VOLUME_IMAGE_GUEST_PULL;
 
 use opentelemetry::global;
 use tracing::span;
@@ -269,6 +271,17 @@ impl AgentService {
         cdh_handler_sealed_secrets(&mut oci)
             .await
             .map_err(|e| anyhow!("failed to handle sealed secrets: {}", e))?;
+
+        // For guest-pull containers, resolve named users from the image's /etc/passwd
+        // before policy evaluation. This is needed because the host cannot access
+        // encrypted image layers to resolve users during policy generation.
+        self.resolve_image_user(&cid, &req.storages, &mut oci)
+            .await?;
+
+        // Policy check happens AFTER image pull and user resolution so that
+        // named users (e.g., "appuser") are resolved to correct UID/GID before
+        // policy validation.
+        is_allowed(&req).await.map_err(|e| anyhow!("policy check failed: {}", e))?;
 
         let mut s = self.sandbox.lock().await;
         s.container_mounts.insert(cid.clone(), m);
@@ -720,6 +733,135 @@ impl AgentService {
             }
         }
     }
+
+    /// Resolve named users from the image's /etc/passwd for guest-pull containers.
+    ///
+    /// When using nydus-snapshotter or other guest-pull mechanisms, the host cannot
+    /// access image layers to resolve named users (e.g., "appuser") to UIDs during
+    /// policy generation. This function reads the User annotation from the config.json
+    /// created by image-rs and resolves it from the container's /etc/passwd.
+    ///
+    /// # Arguments
+    /// * `cid` - Container ID
+    /// * `storages` - Storage configurations from the request
+    /// * `oci` - OCI spec to update with resolved UID/GID
+    ///
+    /// # Returns
+    /// * `Ok(())` if resolution succeeds or is not needed
+    /// * `Err` if user resolution fails
+    async fn resolve_image_user(
+        &self,
+        cid: &str,
+        storages: &[protocols::agent::Storage],
+        oci: &mut oci::Spec,
+    ) -> Result<()> {
+        use oci_spec::runtime::Spec as OciSpec;
+
+        // Check if this is a guest-pull container
+        let is_guest_pull = storages
+            .iter()
+            .any(|s| s.driver == KATA_VIRTUAL_VOLUME_IMAGE_GUEST_PULL);
+
+        if !is_guest_pull {
+            return Ok(());
+        }
+
+        // Read config.json from bundle created by image-rs
+        let bundle_path = Path::new(CONTAINER_BASE).join(cid);
+        let config_path = bundle_path.join("config.json");
+
+        if !config_path.exists() {
+            // No config.json yet - image might not be fully pulled
+            debug!(
+                sl(),
+                "config.json not found at {:?}, skipping user resolution", config_path
+            );
+            return Ok(());
+        }
+
+        // Load the config.json created by image-rs
+        let image_spec = OciSpec::load(&config_path).map_err(|e| {
+            anyhow!(
+                "failed to load image config.json from {:?}: {}",
+                config_path,
+                e
+            )
+        })?;
+
+        // Get the User annotation added by image-rs
+        const ANNOTATION_USER: &str = "org.opencontainers.image.user";
+        let user_string = image_spec
+            .annotations()
+            .as_ref()
+            .and_then(|a| a.get(ANNOTATION_USER))
+            .cloned()
+            .unwrap_or_default();
+
+        if user_string.is_empty() {
+            debug!(sl(), "no user annotation in image config for container {}", cid);
+            return Ok(());
+        }
+
+        // Check if the user string is already numeric (no resolution needed)
+        let is_numeric = user_string
+            .split(':')
+            .all(|part| part.is_empty() || part.chars().all(|c| c.is_ascii_digit()));
+
+        if is_numeric {
+            debug!(
+                sl(),
+                "user '{}' is already numeric, no resolution needed for container {}",
+                user_string,
+                cid
+            );
+            return Ok(());
+        }
+
+        info!(
+            sl(),
+            "resolving named user '{}' for container {}", user_string, cid
+        );
+
+        // Resolve user from /etc/passwd in the container's rootfs
+        let rootfs_path = bundle_path.join("rootfs");
+        let resolved = user_resolution::resolve_user_string(&rootfs_path, &user_string)
+            .map_err(|e| {
+                anyhow!(
+                    "failed to resolve user '{}' from {:?}: {}",
+                    user_string,
+                    rootfs_path,
+                    e
+                )
+            })?;
+
+        info!(
+            sl(),
+            "resolved user '{}' to UID={}, GID={}, additional_gids={:?} for container {}",
+            user_string,
+            resolved.uid,
+            resolved.gid,
+            resolved.additional_gids,
+            cid
+        );
+
+        // Update OCI spec with resolved UID/GID
+        if let Some(process) = oci.process_mut() {
+            let user = process.user_mut();
+            user.set_uid(oci::Uid::from_raw(resolved.uid));
+            user.set_gid(oci::Gid::from_raw(resolved.gid));
+            if !resolved.additional_gids.is_empty() {
+                user.set_additional_gids(Some(
+                    resolved
+                        .additional_gids
+                        .iter()
+                        .map(|g| oci::Gid::from_raw(*g))
+                        .collect(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn mem_agent_memcgconfig_to_memcg_optionconfig(
@@ -763,7 +905,9 @@ impl agent_ttrpc::AgentService for AgentService {
         req: protocols::agent::CreateContainerRequest,
     ) -> ttrpc::Result<Empty> {
         trace_rpc_call!(ctx, "create_container", req);
-        is_allowed(&req).await?;
+        // Note: Policy check (is_allowed) is called inside do_create_container
+        // AFTER image pull and user resolution, so that named users can be
+        // resolved from /etc/passwd before policy validation.
         self.do_create_container(req).await.map_ttrpc_err(same)?;
         Ok(Empty::new())
     }
