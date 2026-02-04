@@ -19,20 +19,20 @@ source "${kubernetes_dir}/confidential_kbs.sh"
 tools_dir="${repo_root_dir}/tools"
 kata_tarball_dir="${2:-kata-artifacts}"
 
-export DOCKER_REGISTRY="${DOCKER_REGISTRY:-quay.io}"
-export DOCKER_REPO="${DOCKER_REPO:-kata-containers/kata-deploy-ci}"
-export DOCKER_TAG="${DOCKER_TAG:-kata-containers-latest}"
+export DOCKER_REGISTRY="quay.io"
+export DOCKER_REPO="fidencio/kata-deploy"
+export DOCKER_TAG="test-nydus"
 export SNAPSHOTTER_DEPLOY_WAIT_TIMEOUT="${SNAPSHOTTER_DEPLOY_WAIT_TIMEOUT:-8m}"
 export KATA_HYPERVISOR="${KATA_HYPERVISOR:-qemu}"
 export CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-containerd}"
-export KBS="${KBS:-false}"
-export KBS_INGRESS="${KBS_INGRESS:-}"
-export KUBERNETES="${KUBERNETES:-}"
-export SNAPSHOTTER="${SNAPSHOTTER:-}"
+export KBS="true"
+export KBS_INGRESS="nodeport"
+export KUBERNETES="kubeadm"
+export SNAPSHOTTER="nydus"
 export ITA_KEY="${ITA_KEY:-}"
 export HTTPS_PROXY="${HTTPS_PROXY:-${https_proxy:-}}"
 export NO_PROXY="${NO_PROXY:-${no_proxy:-}}"
-export PULL_TYPE="${PULL_TYPE:-default}"
+export PULL_TYPE="guest-pull"
 export TEST_CLUSTER_NAMESPACE="${TEST_CLUSTER_NAMESPACE:-kata-containers-k8s-tests}"
 export GENPOLICY_PULL_METHOD="${GENPOLICY_PULL_METHOD:-oci-distribution}"
 export TARGET_ARCH="${TARGET_ARCH:-x86_64}"
@@ -175,7 +175,7 @@ function deploy_kata() {
 
 	# Workaround to avoid modifying the workflow yaml files
 	case "${KATA_HYPERVISOR}" in
-		qemu-nvidia-gpu-*)
+		qemu-nvidia-gpu-*|qemu-tdx|qemu-snp)
 			USE_EXPERIMENTAL_SETUP_SNAPSHOTTER=true
 			SNAPSHOTTER="nydus"
 			EXPERIMENTAL_FORCE_GUEST_PULL=false
@@ -219,7 +219,7 @@ function deploy_kata() {
 				# deployed when the machine is configured, as on the BM machines).
 				if [[ ${ARCH} == "x86_64" ]]; then
 					case "${KATA_HYPERVISOR}" in
-						qemu-coco-dev*|qemu-nvidia-gpu-*) EXPERIMENTAL_SETUP_SNAPSHOTTER="${SNAPSHOTTER}" ;;
+						qemu-coco-dev*|qemu-nvidia-gpu-*|qemu-tdx|qemu-snp) EXPERIMENTAL_SETUP_SNAPSHOTTER="${SNAPSHOTTER}" ;;
 						*) ;;
 					esac
 				fi
@@ -565,7 +565,7 @@ function main() {
 	export KATA_HOST_OS="${KATA_HOST_OS:-}"
 	export K8S_TEST_HOST_TYPE="${K8S_TEST_HOST_TYPE:-}"
 
-	AUTO_GENERATE_POLICY="${AUTO_GENERATE_POLICY:-}"
+	AUTO_GENERATE_POLICY="no"
 
 	# Auto-generate policy on some Host types, if the caller didn't specify an AUTO_GENERATE_POLICY value.
 	if [[ -z "${AUTO_GENERATE_POLICY}" ]]; then
