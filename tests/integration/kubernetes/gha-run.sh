@@ -563,7 +563,9 @@ function cleanup_nydus_snapshotter() {
 
 function main() {
 	export KATA_HOST_OS="${KATA_HOST_OS:-}"
-	export K8S_TEST_HOST_TYPE="${K8S_TEST_HOST_TYPE:-}"
+	# Default to baremetal-no-attestation to skip tests requiring GitHub secrets
+	# (e.g., k8s-guest-pull-image-encrypted, k8s-confidential-attestation, etc.)
+	export K8S_TEST_HOST_TYPE="${K8S_TEST_HOST_TYPE:-baremetal-no-attestation}"
 
 	AUTO_GENERATE_POLICY="no"
 
