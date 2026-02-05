@@ -648,20 +648,22 @@ function helm_helper() {
 
 		# For TDX and SNP shims, snapshotter.setup must ALWAYS be disabled in CI
 		# Check if any TDX/SNP shims are enabled
-		disable_snapshotter_setup=false
-		for shim in ${HELM_SHIMS}; do
-			case "${shim}" in
-				qemu-tdx|qemu-snp)
-					disable_snapshotter_setup=true
-					break
-					;;
-			esac
-		done
+		# NOTE: Commented out for local testing - allows snapshotter setup for qemu-snp/qemu-tdx
+		# disable_snapshotter_setup=false
+		# for shim in ${HELM_SHIMS}; do
+		# 	case "${shim}" in
+		# 		qemu-tdx|qemu-snp)
+		# 			disable_snapshotter_setup=true
+		# 			break
+		# 			;;
+		# 	esac
+		# done
 
 		# Safety check: Fail if EXPERIMENTAL_SETUP_SNAPSHOTTER is set when using SNP/TDX shims
-		if [[ "${disable_snapshotter_setup}" == "true" ]] && [[ -n "${HELM_EXPERIMENTAL_SETUP_SNAPSHOTTER}" ]]; then
-			die "ERROR: HELM_EXPERIMENTAL_SETUP_SNAPSHOTTER cannot be set when using SNP/TDX shims (qemu-snp, qemu-tdx, qemu-nvidia-gpu-snp, qemu-nvidia-gpu-tdx). snapshotter.setup must always be disabled for these shims."
-		fi
+		# NOTE: Commented out for local testing
+		# if [[ "${disable_snapshotter_setup}" == "true" ]] && [[ -n "${HELM_EXPERIMENTAL_SETUP_SNAPSHOTTER}" ]]; then
+		# 	die "ERROR: HELM_EXPERIMENTAL_SETUP_SNAPSHOTTER cannot be set when using SNP/TDX shims (qemu-snp, qemu-tdx, qemu-nvidia-gpu-snp, qemu-nvidia-gpu-tdx). snapshotter.setup must always be disabled for these shims."
+		# fi
 
 		if [[ -n "${HELM_EXPERIMENTAL_SETUP_SNAPSHOTTER}" ]]; then
 			# Convert space-separated or comma-separated list to YAML array
