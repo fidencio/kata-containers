@@ -20,6 +20,7 @@ use hypervisor::{
 };
 use kata_sys_util::{mount::get_mount_path, spec::load_oci_spec};
 use kata_types::{
+    annotations::docker,
     annotations::Annotation,
     build_path,
     config::{default::DEFAULT_GUEST_DNS_FILE, hypervisor::RootlessUser, Hypervisor, TomlConfig},
@@ -364,25 +365,42 @@ impl RuntimeHandlerManager {
 
         let mut network_created = false;
         let mut netns = None;
-        if let Some(linux) = &spec.linux() {
-            let linux_namespaces = linux.namespaces().clone().unwrap_or_default();
-            for ns in &linux_namespaces {
-                if ns.typ() != oci::LinuxNamespaceType::Network {
-                    continue;
+
+        // Docker 28+ passes the libnetwork sandbox netns path via annotation so the veth is in that
+        // netns. Prefer it when present and accessible (see kata-containers/issues/9340).
+        if let Some(annotations) = spec.annotations() {
+            if let Some(path) = annotations.get(docker::NETWORK_NAMESPACE_PATH_KEY) {
+                let path = path.trim();
+                if !path.is_empty() && Path::new(path).exists() {
+                    netns = Some(path.to_string());
+                    info!(sl!(), "using Docker network namespace path from annotation: {}", path);
+                } else if !path.is_empty() {
+                    warn!(sl!(), "Docker netns path from annotation not accessible: {}", path);
                 }
-                // get netns path from oci spec
-                if ns.path().is_some() {
-                    netns = ns.path().clone().map(|p| p.display().to_string());
+            }
+        }
+
+        if netns.is_none() {
+            if let Some(linux) = &spec.linux() {
+                let linux_namespaces = linux.namespaces().clone().unwrap_or_default();
+                for ns in &linux_namespaces {
+                    if ns.typ() != oci::LinuxNamespaceType::Network {
+                        continue;
+                    }
+                    // get netns path from oci spec
+                    if ns.path().is_some() {
+                        netns = ns.path().clone().map(|p| p.display().to_string());
+                    }
+                    // if we get empty netns from oci spec, we need to create netns for the VM
+                    else {
+                        let ns_name = generate_netns_name();
+                        let raw_netns = NetNs::new(ns_name)?;
+                        let path = Some(PathBuf::from(raw_netns.path()).display().to_string());
+                        netns = path;
+                        network_created = true;
+                    }
+                    break;
                 }
-                // if we get empty netns from oci spec, we need to create netns for the VM
-                else {
-                    let ns_name = generate_netns_name();
-                    let raw_netns = NetNs::new(ns_name)?;
-                    let path = Some(PathBuf::from(raw_netns.path()).display().to_string());
-                    netns = path;
-                    network_created = true;
-                }
-                break;
             }
         }
 

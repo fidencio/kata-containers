@@ -70,6 +70,25 @@ Docker supports Kata Containers since 22.06:
 $ sudo docker run --runtime io.containerd.kata.v2
 ```
 
+**Docker 26+ networking issue:** With Docker 26.0 and later (including 28 and 29), Kata
+containers may have no working network (e.g. `eth0` missing or no IP) when using stock
+Docker and Kata. See [issue #9340](https://github.com/kata-containers/kata-containers/issues/9340) and
+[moby#47626](https://github.com/moby/moby/issues/47626). When Docker uses containerd for
+execution, the network namespace passed to Kata often has only loopback; the veth is never
+added to that netns (upstream integration/ordering issue). **Fix:** Use Kata with support
+for the `com.docker.network.namespace.path` annotation (this commit) together with Docker
+built from patched Moby (daemon + libnetwork changes that pass the sandbox netns path and
+allocate the network before the task). Then `docker run --runtime io.containerd.run.kata.v2`
+gets working eth0.
+
+**Workarounds when you need Kata + networking (without the fix):**
+
+1. **Use Docker 25.x or earlier** for `docker run --runtime io.containerd.run.kata.v2` when
+   you need container networking.
+2. **Use nerdctl or ctr with the same containerd** for Kata workloads (networking works);
+   use Docker only for non-Kata containers if desired.
+3. **Use Kubernetes + kata-deploy** for Kata workloads; use Docker for local non-Kata use.
+
 Kata Containers works perfectly with containerd, we recommend to use
 containerd's Docker-style command line tool [`nerdctl`](https://github.com/containerd/nerdctl).
 

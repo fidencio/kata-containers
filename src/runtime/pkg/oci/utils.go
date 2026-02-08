@@ -40,7 +40,7 @@ import (
 	kataTypes "github.com/kata-containers/kata-containers/src/runtime/pkg/types"
 	exp "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/experimental"
 	vcAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations"
-	dockershimAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations/dockershim"
+	dockerAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations/docker"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
 	vcutils "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/utils"
 )
@@ -56,11 +56,11 @@ var (
 
 	// CRIContainerTypeKeyList lists all the CRI keys that could define
 	// the container type from annotations in the config.json.
-	CRIContainerTypeKeyList = []string{ctrAnnotations.ContainerType, crioAnnotations.ContainerType, dockershimAnnotations.ContainerTypeLabelKey}
+	CRIContainerTypeKeyList = []string{ctrAnnotations.ContainerType, crioAnnotations.ContainerType, dockerAnnotations.ContainerTypeLabelKey}
 
 	// CRISandboxNameKeyList lists all the CRI keys that could define
 	// the sandbox ID (sandbox ID) from annotations in the config.json.
-	CRISandboxNameKeyList = []string{ctrAnnotations.SandboxID, crioAnnotations.SandboxID, dockershimAnnotations.SandboxIDLabelKey}
+	CRISandboxNameKeyList = []string{ctrAnnotations.SandboxID, crioAnnotations.SandboxID, dockerAnnotations.SandboxIDLabelKey}
 
 	// CRIContainerTypeList lists all the maps from CRI ContainerTypes annotations
 	// to a virtcontainers ContainerType.
@@ -69,8 +69,8 @@ var (
 		{crioAnnotations.ContainerTypeContainer, vc.PodContainer},
 		{ctrAnnotations.ContainerTypeSandbox, vc.PodSandbox},
 		{ctrAnnotations.ContainerTypeContainer, vc.PodContainer},
-		{dockershimAnnotations.ContainerTypeLabelSandbox, vc.PodSandbox},
-		{dockershimAnnotations.ContainerTypeLabelContainer, vc.PodContainer},
+		{dockerAnnotations.ContainerTypeLabelSandbox, vc.PodSandbox},
+		{dockerAnnotations.ContainerTypeLabelContainer, vc.PodContainer},
 	}
 )
 
@@ -376,13 +376,29 @@ func networkConfig(ocispec specs.Spec, sandboxID string, config RuntimeConfig) (
 
 	var netConf vc.NetworkConfig
 
-	for _, n := range linux.Namespaces {
-		if n.Type != specs.NetworkNamespace {
-			continue
+	// Docker 26+ with Kata passes the libnetwork netns path via annotation so the
+	// launcher does not setns the runtime into that netns; Kata uses it here.
+	// If the path is not accessible (e.g. not visible in shim mount namespace),
+	// leave NetworkID empty so Kata creates its own netns and the container can start.
+	if ocispec.Annotations != nil {
+		if path := ocispec.Annotations[dockerAnnotations.NetworkNamespacePathKey]; path != "" {
+			if _, err := os.Stat(path); err == nil {
+				netConf.NetworkID = path
+				ociLog.WithField("netns", path).Info("using Docker network namespace path from annotation (com.docker.network.namespace.path)")
+			} else {
+				ociLog.WithField("netns", path).WithError(err).Warn("Docker netns path from annotation not accessible, will create new netns")
+			}
 		}
-
-		if n.Path != "" {
-			netConf.NetworkID = n.Path
+	}
+	if netConf.NetworkID == "" {
+		for _, n := range linux.Namespaces {
+			if n.Type != specs.NetworkNamespace {
+				continue
+			}
+			if n.Path != "" {
+				netConf.NetworkID = n.Path
+				break
+			}
 		}
 	}
 	netConf.InterworkingModel = config.InterNetworkModel

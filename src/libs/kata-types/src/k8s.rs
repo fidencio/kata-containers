@@ -67,12 +67,12 @@ pub fn is_special_dir<P: AsRef<Path>>(path: P, dir_type: &str) -> bool {
 
 /// Get K8S container type from OCI annotations.
 pub fn container_type(spec: &oci::Spec) -> ContainerType {
-    // PodSandbox:  "sandbox" (Containerd & CRI-O), "podsandbox" (dockershim)
-    // PodContainer: "container" (Containerd & CRI-O & dockershim)
+    // PodSandbox:  "sandbox" (Containerd & CRI-O), "podsandbox" (Docker)
+    // PodContainer: "container" (Containerd & CRI-O & Docker)
     for k in [
         annotations::crio::CONTAINER_TYPE_LABEL_KEY,
         annotations::cri_containerd::CONTAINER_TYPE_LABEL_KEY,
-        annotations::dockershim::CONTAINER_TYPE_LABEL_KEY,
+        annotations::docker::CONTAINER_TYPE_LABEL_KEY,
     ]
     .iter()
     {
@@ -116,7 +116,7 @@ pub fn container_type_with_id(spec: &oci::Spec) -> (ContainerType, Option<String
         for k in [
             annotations::crio::SANDBOX_ID_LABEL_KEY,
             annotations::cri_containerd::SANDBOX_ID_LABEL_KEY,
-            annotations::dockershim::SANDBOX_ID_LABEL_KEY,
+            annotations::docker::SANDBOX_ID_LABEL_KEY,
         ]
         .iter()
         {
@@ -467,11 +467,11 @@ mod tests {
         spec.set_annotations(Some(
             [
                 (
-                    annotations::dockershim::CONTAINER_TYPE_LABEL_KEY.to_string(),
+                    annotations::docker::CONTAINER_TYPE_LABEL_KEY.to_string(),
                     container::CONTAINER.to_string(),
                 ),
                 (
-                    annotations::dockershim::SANDBOX_ID_LABEL_KEY.to_string(),
+                    annotations::docker::SANDBOX_ID_LABEL_KEY.to_string(),
                     sid.clone(),
                 ),
             ]

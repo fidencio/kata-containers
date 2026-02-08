@@ -490,13 +490,27 @@ func RevertBytes(num uint64) uint64 {
 	return 1024*RevertBytes(a) + b
 }
 
-// IsDockerContainer returns if the container is managed by docker
-// This is done by checking the prestart hook for `libnetwork` arguments.
+// IsDockerContainer returns true if the container is managed by Docker.
+// Detection uses two signals (either is sufficient):
+//  1. Prestart hook with an arg starting with "libnetwork" (Docker's classic
+//     libnetwork integration). This may not be present when Docker uses
+//     containerd for execution (Docker 26+).
+//  2. Any OCI annotation key with prefix "com.docker." (reserved Docker
+//     namespace), e.g. when Docker uses containerd and no libnetwork hook
+//     is injected.
 func IsDockerContainer(spec *specs.Spec) bool {
-	if spec == nil || spec.Hooks == nil {
+	if spec == nil {
 		return false
 	}
-
+	// Fallback: Docker sets annotations in the "com.docker." namespace when using containerd.
+	for key := range spec.Annotations {
+		if strings.HasPrefix(key, "com.docker.") {
+			return true
+		}
+	}
+	if spec.Hooks == nil {
+		return false
+	}
 	for _, hook := range spec.Hooks.Prestart { //nolint:all
 		for _, arg := range hook.Args {
 			if strings.HasPrefix(arg, "libnetwork") {
@@ -504,6 +518,5 @@ func IsDockerContainer(spec *specs.Spec) bool {
 			}
 		}
 	}
-
 	return false
 }

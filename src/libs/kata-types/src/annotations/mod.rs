@@ -25,8 +25,8 @@ pub mod cri_containerd;
 /// CRI-O specific annotations.
 pub mod crio;
 
-/// Dockershim specific annotations.
-pub mod dockershim;
+/// Docker (daemon) specific annotations.
+pub mod docker;
 
 /// Third-party annotations.
 pub mod thirdparty;

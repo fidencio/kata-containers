@@ -6,9 +6,8 @@
 
 #![allow(missing_docs)]
 
-//! Copied from k8s.io/pkg/kubelet/dockershim/docker_service.go, used to identify whether a docker
-//! container is a sandbox or a regular container, will be removed after defining those as public
-//! fields in dockershim.
+//! Annotations set by Docker (the daemon) or historically by the Kubernetes dockershim.
+//! Used to identify container type (sandbox vs container), sandbox ID, and network namespace.
 
 ///  ContainerTypeLabelKey is the container type (podsandbox or container) of key.
 pub const CONTAINER_TYPE_LABEL_KEY: &str = "io.kubernetes.docker.type";
@@ -21,3 +20,9 @@ pub const CONTAINER: &str = "container";
 
 /// SandboxIDLabelKey is the sandbox ID annotation.
 pub const SANDBOX_ID_LABEL_KEY: &str = "io.kubernetes.sandbox.id";
+
+/// NetworkNamespacePathKey is set by Docker when using a runtime that needs the sandbox netns
+/// (e.g. Kata). The value is the libnetwork sandbox key (netns path). Kata uses it so the VM
+/// uses that netns (where the veth was placed) instead of creating a new one.
+/// Must match Docker's DockerNetworkNamespacePathAnnotation (com.docker.network.namespace.path).
+pub const NETWORK_NAMESPACE_PATH_KEY: &str = "com.docker.network.namespace.path";

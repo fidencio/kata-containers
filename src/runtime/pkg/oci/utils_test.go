@@ -24,7 +24,7 @@ import (
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/device/config"
 	vc "github.com/kata-containers/kata-containers/src/runtime/virtcontainers"
 	vcAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations"
-	dockerAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations/dockershim"
+	dockerAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations/docker"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/compatoci"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
 )
@@ -244,21 +244,21 @@ func TestContainerType(t *testing.T) {
 			expectedErr:     false,
 		},
 		{
-			description:     "dockershim unexpected annotation, expect error",
+			description:     "Docker unexpected annotation, expect error",
 			annotationKey:   dockerAnnotations.ContainerTypeLabelKey,
 			annotationValue: "foo",
 			expectedType:    vc.UnknownContainerType,
 			expectedErr:     true,
 		},
 		{
-			description:     "dockershim sandbox",
+			description:     "Docker sandbox",
 			annotationKey:   dockerAnnotations.ContainerTypeLabelKey,
 			annotationValue: string(dockerAnnotations.ContainerTypeLabelSandbox),
 			expectedType:    vc.PodSandbox,
 			expectedErr:     false,
 		},
 		{
-			description:     "dockershim container",
+			description:     "Docker container",
 			annotationKey:   dockerAnnotations.ContainerTypeLabelKey,
 			annotationValue: string(dockerAnnotations.ContainerTypeLabelContainer),
 			expectedType:    vc.PodContainer,

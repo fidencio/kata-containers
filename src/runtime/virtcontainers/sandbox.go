@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	v1 "github.com/containerd/cgroups/stats/v1"
 	v2 "github.com/containerd/cgroups/v2/stats"
@@ -1019,11 +1020,29 @@ func (s *Sandbox) createNetwork(ctx context.Context) error {
 	}
 
 	// Add all the networking endpoints.
-	if _, err := s.network.AddEndpoints(ctx, s, nil, false); err != nil {
-		return err
+	spec := s.GetPatchedOCISpec()
+	if utils.IsDockerContainer(spec) {
+		// Docker 26+ may set up the container netns after the runtime is invoked; wait and retry when no endpoints are found (issue #9340 / moby #47626).
+		// Note: with Docker+containerd the netns we receive may never get a veth (only loopback); that is an upstream integration issue.
+		const dockerNetInitialDelay = 1 * time.Second
+		const dockerNetRetries = 10
+		const dockerNetRetryDelay = 1 * time.Second
+		time.Sleep(dockerNetInitialDelay)
+		var err error
+		for i := 0; i < dockerNetRetries; i++ {
+			if _, err = s.network.AddEndpoints(ctx, s, nil, false); err != nil {
+				return err
+			}
+			if len(s.network.Endpoints()) > 0 || i == dockerNetRetries-1 {
+				break
+			}
+			s.Logger().WithField("attempt", i+1).Warn("Docker container: no network endpoints found, retrying...")
+			time.Sleep(dockerNetRetryDelay)
+		}
+		return nil
 	}
-
-	return nil
+	_, err := s.network.AddEndpoints(ctx, s, nil, false)
+	return err
 }
 
 func (s *Sandbox) postCreatedNetwork(ctx context.Context) error {

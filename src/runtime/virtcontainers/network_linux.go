@@ -328,6 +328,14 @@ func (n *LinuxNetwork) GetEndpointsNum() (int, error) {
 func (n *LinuxNetwork) addAllEndpoints(ctx context.Context, s *Sandbox, hotplug bool) error {
 	netnsHandle, err := netns.GetFromPath(n.netNSPath)
 	if err != nil {
+		// When the netns was not created by Kata (e.g. path from Docker annotation),
+		// it may not be accessible from the shim (e.g. different mount namespace).
+		// Do not fail sandbox creation; treat as empty netns so the container can start.
+		if !n.netNSCreated {
+			networkLogger().WithField("netns", n.netNSPath).WithError(err).
+				Warn("could not open netns path (e.g. from Docker annotation), no network endpoints")
+			return nil
+		}
 		return err
 	}
 	defer netnsHandle.Close()
@@ -343,16 +351,28 @@ func (n *LinuxNetwork) addAllEndpoints(ctx context.Context, s *Sandbox, hotplug 
 		return err
 	}
 
+	// Diagnostic: when no configured endpoints will be found, log what we see in the netns (for Docker 26+ debugging).
+	var linkNames []string
+	var linksWithAddrs int
+	for _, link := range linkList {
+		addrs, _ := netlinkHandle.AddrList(link, netlink.FAMILY_ALL)
+		if len(addrs) > 0 {
+			linksWithAddrs++
+		}
+		linkNames = append(linkNames, fmt.Sprintf("%s(%s)", link.Attrs().Name, link.Type()))
+	}
+
 	for _, link := range linkList {
 		netInfo, err := networkInfoFromLink(netlinkHandle, link)
 		if err != nil {
 			return err
 		}
 
-		// Ignore unconfigured network interfaces. These are
-		// either base tunnel devices that are not namespaced
-		// like gre0, gretap0, sit0, ipip0, tunl0 or incorrectly
-		// setup interfaces.
+		// Ignore unconfigured network interfaces (no IP yet).
+		// These are either base tunnel devices that are not namespaced
+		// (gre0, gretap0, sit0, ipip0, tunl0) or interfaces that are
+		// not yet configured (e.g. Docker 26+ creates veth before
+		// assigning an IP; we rely on createNetwork retries for Docker).
 		if len(netInfo.Addrs) == 0 {
 			continue
 		}
@@ -381,6 +401,21 @@ func (n *LinuxNetwork) addAllEndpoints(ctx context.Context, s *Sandbox, hotplug 
 		return n.eps[i].Name() < n.eps[j].Name()
 	})
 
+	if len(n.eps) == 0 {
+		if len(linkNames) == 0 {
+			networkLogger().WithField("netns", n.netNSPath).Warn("no configured endpoints: netns is empty (no interfaces)")
+		} else {
+			onlyLoopback := len(linkNames) == 1 && linkList[0].Attrs().Name == "lo"
+			msg := "no configured endpoints: netns has interfaces but none with an IP (or only loopback)"
+			if onlyLoopback {
+				msg = "no configured endpoints: netns has only loopback (waiting for veth to be added by Docker/CNI)"
+			}
+			networkLogger().WithField("netns", n.netNSPath).
+				WithField("interfaces", linkNames).
+				WithField("interfaces_with_addrs", linksWithAddrs).
+				Warn(msg)
+		}
+	}
 	networkLogger().WithField("endpoints", n.eps).Info("endpoints found after scan")
 
 	return nil

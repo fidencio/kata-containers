@@ -582,21 +582,35 @@ func TestRevertBytes(t *testing.T) {
 func TestIsDockerContainer(t *testing.T) {
 	assert := assert.New(t)
 
+	// No hooks, no docker annotations -> not Docker
 	ociSpec := &specs.Spec{
 		Hooks: &specs.Hooks{
 			Prestart: []specs.Hook{
-				{
-					Args: []string{
-						"haha",
-					},
-				},
+				{Args: []string{"haha"}},
 			},
 		},
 	}
 	assert.False(IsDockerContainer(ociSpec))
 
+	// Libnetwork prestart hook -> Docker
 	ociSpec.Hooks.Prestart = append(ociSpec.Hooks.Prestart, specs.Hook{ //nolint:all
 		Args: []string{"libnetwork-xxx"},
 	})
 	assert.True(IsDockerContainer(ociSpec))
+
+	// com.docker.* annotation (e.g. Docker 26+ with containerd) -> Docker
+	ociSpecNoHook := &specs.Spec{
+		Annotations: map[string]string{
+			"com.docker.compose.project": "myapp",
+		},
+	}
+	assert.True(IsDockerContainer(ociSpecNoHook))
+
+	// Other annotations only -> not Docker
+	ociSpecOther := &specs.Spec{
+		Annotations: map[string]string{
+			"io.kubernetes.cri.sandbox-id": "abc",
+		},
+	}
+	assert.False(IsDockerContainer(ociSpecOther))
 }
