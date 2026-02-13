@@ -38,6 +38,6 @@ jobs:
         run: ./tools/packaging/scripts/populate-oras-tarball-cache.sh all
         env:
           ARTEFACT_REGISTRY: ghcr.io
-          ARTEFACT_REPOSITORY: kata-containers
+          ARTEFACT_REPOSITORY: fidencio
           ARTEFACT_REGISTRY_USERNAME: ${{ github.actor }}
           ARTEFACT_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
