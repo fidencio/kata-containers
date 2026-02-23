@@ -448,6 +448,13 @@ install_image() {
 		export REPO_COMPONENTS
 	fi
 
+	# Include nvidia GPU kernel modules in default rootfs so nvidia kernel works with it
+	if [[ -z "${variant}" ]] && { [[ "${ARCH}" == "x86_64" ]] || [[ "${ARCH}" == "aarch64" ]]; } && [[ -f "${workdir}/kata-static-kernel-nvidia-gpu-modules.tar.zst" ]]; then
+		export EXTRA_KERNEL_MODULES_TARBALL="/kata-containers/tools/packaging/kata-deploy/local-build/build/kata-static-kernel-nvidia-gpu-modules.tar.zst"
+	else
+		unset EXTRA_KERNEL_MODULES_TARBALL
+	fi
+
 	"${rootfs_builder}" --osname="${os_name}" --osversion="${os_version}" --imagetype=image --prefix="${prefix}" --destdir="${destdir}" --image_initrd_suffix="${variant}"
 }
 
@@ -558,6 +565,13 @@ install_initrd() {
 
 	if [[ -n "${REPO_COMPONENTS}" ]]; then
 		export REPO_COMPONENTS
+	fi
+
+	# Include nvidia GPU kernel modules in default rootfs so nvidia kernel works with it
+	if [[ -z "${variant}" ]] && { [[ "${ARCH}" == "x86_64" ]] || [[ "${ARCH}" == "aarch64" ]]; } && [[ -f "${workdir}/kata-static-kernel-nvidia-gpu-modules.tar.zst" ]]; then
+		export EXTRA_KERNEL_MODULES_TARBALL="/kata-containers/tools/packaging/kata-deploy/local-build/build/kata-static-kernel-nvidia-gpu-modules.tar.zst"
+	else
+		unset EXTRA_KERNEL_MODULES_TARBALL
 	fi
 
 	"${rootfs_builder}" --osname="${os_name}" --osversion="${os_version}" --imagetype=initrd --prefix="${prefix}" --destdir="${destdir}" --image_initrd_suffix="${variant}"
@@ -773,12 +787,15 @@ install_kernel_nvidia_gpu_dragonball_experimental() {
 
 #Install GPU enabled kernel asset
 install_kernel_nvidia_gpu() {
+	local old_kernel_debug="${KERNEL_DEBUG_ENABLED:-no}"
+	export KERNEL_DEBUG_ENABLED=yes
 	export CONFIDENTIAL_GUEST="yes"
 	export MEASURED_ROOTFS="yes"
 	install_kernel_helper \
 		"assets.kernel.nvidia" \
 		"kernel-nvidia-gpu" \
 		"-x -g nvidia"
+	export KERNEL_DEBUG_ENABLED="${old_kernel_debug}"
 }
 
 install_qemu_helper() {

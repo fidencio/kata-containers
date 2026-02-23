@@ -176,7 +176,7 @@ boot-image-se-tarball: kernel-tarball rootfs-initrd-confidential-tarball
 stratovirt-tarball:
 	${MAKE} $@-build
 
-rootfs-image-tarball: agent-tarball
+rootfs-image-tarball: agent-tarball kernel-nvidia-gpu-tarball
 	${MAKE} $@-build
 
 rootfs-image-confidential-tarball: agent-tarball pause-image-tarball coco-guest-components-tarball kernel-tarball
@@ -188,7 +188,7 @@ rootfs-image-mariner-tarball: agent-tarball
 rootfs-initrd-confidential-tarball: agent-tarball pause-image-tarball coco-guest-components-tarball kernel-tarball
 	${MAKE} $@-build
 
-rootfs-initrd-tarball: agent-tarball
+rootfs-initrd-tarball: agent-tarball kernel-nvidia-gpu-tarball
 	${MAKE} $@-build
 
 rootfs-image-nvidia-gpu-tarball: agent-tarball busybox-tarball kernel-nvidia-gpu-tarball

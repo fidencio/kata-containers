@@ -18,6 +18,7 @@ AGENT_BIN=${AGENT_BIN:-kata-agent}
 AGENT_INIT=${AGENT_INIT:-no}
 MEASURED_ROOTFS=${MEASURED_ROOTFS:-no}
 KERNEL_MODULES_DIR=${KERNEL_MODULES_DIR:-""}
+EXTRA_KERNEL_MODULES_TARBALL=${EXTRA_KERNEL_MODULES_TARBALL:-""}
 OSBUILDER_VERSION="unknown"
 DOCKER_RUNTIME=${DOCKER_RUNTIME:-runc}
 # this GOPATH is for installing yq from install_yq.sh
@@ -229,6 +230,11 @@ IMAGE_REGISTRY      Hostname for the image registry used to pull down the rootfs
 
 KERNEL_MODULES_DIR  Path to a directory containing kernel modules to include in
                     the rootfs.
+                    Default value: <empty>
+
+EXTRA_KERNEL_MODULES_TARBALL  Path to a .tar.zst tarball of kernel modules to
+                    extract into the rootfs lib/modules (e.g. nvidia GPU kernel
+                    modules). Ignored when building the nvidia-gpu rootfs.
                     Default value: <empty>
 
 LIBC                libc the agent is built against (gnu or musl).
@@ -583,6 +589,7 @@ build_rootfs_distro()
 			--env CONFIDENTIAL_GUEST="${CONFIDENTIAL_GUEST}" \
 			--env NVIDIA_GPU_STACK="${NVIDIA_GPU_STACK}" \
 			--env KBUILD_SIGN_PIN="${KBUILD_SIGN_PIN}" \
+			--env EXTRA_KERNEL_MODULES_TARBALL="${EXTRA_KERNEL_MODULES_TARBALL}" \
 			-v "${repo_dir}":"/kata-containers" \
 			-v "${ROOTFS_DIR}":"/rootfs" \
 			-v "${script_dir}/../scripts":"/scripts" \
@@ -662,6 +669,14 @@ EOF
 	popd  >> /dev/null
 
 	[ -n "${KERNEL_MODULES_DIR}" ] && copy_kernel_modules ${KERNEL_MODULES_DIR} ${ROOTFS_DIR}
+
+	# Include extra kernel modules (e.g. nvidia GPU) in default rootfs so nvidia kernel works with it
+	if [[ "${BUILD_VARIANT}" != "nvidia-gpu"* ]] && [[ -n "${EXTRA_KERNEL_MODULES_TARBALL}" ]] && [[ -f "${EXTRA_KERNEL_MODULES_TARBALL}" ]]; then
+		info "Extract extra kernel modules from ${EXTRA_KERNEL_MODULES_TARBALL}"
+		mkdir -p "${ROOTFS_DIR}/lib/modules"
+		tar --zstd -xvf "${EXTRA_KERNEL_MODULES_TARBALL}" -C "${ROOTFS_DIR}/lib/modules"
+		OK "Extra kernel modules extracted"
+	fi
 
 	info "Create ${ROOTFS_DIR}/etc"
 	mkdir -p "${ROOTFS_DIR}/etc"
@@ -759,7 +774,7 @@ EOF
 		tar  --zstd -xvf ${AGENT_TARBALL} -C ${ROOTFS_DIR}
 	fi
 
-	${stripping_tool} ${ROOTFS_DIR}/usr/bin/kata-agent
+	#${stripping_tool} ${ROOTFS_DIR}/usr/bin/kata-agent
 
 	[ -x "${AGENT_DEST}" ] || die "${AGENT_DEST} is not installed in ${ROOTFS_DIR}"
 	OK "Agent installed"

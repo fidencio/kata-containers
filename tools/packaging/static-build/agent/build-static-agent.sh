@@ -18,6 +18,7 @@ build_agent_from_source() {
 	/usr/bin/install_libseccomp.sh /opt /opt
 
 	cd src/agent
+	# When AGENT_STRIP is not "yes", build without stripping (default) for better debugging
 	DESTDIR=${DESTDIR} AGENT_POLICY=${AGENT_POLICY} INIT_DATA=${INIT_DATA} make
 	DESTDIR=${DESTDIR} AGENT_POLICY=${AGENT_POLICY} INIT_DATA=${INIT_DATA} make install
 }
