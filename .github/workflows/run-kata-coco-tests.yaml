@@ -134,16 +134,18 @@ jobs:
         timeout-minutes: 5
         run: bash tests/integration/kubernetes/gha-run.sh delete-csi-driver
 
-  # Generate jobs for testing CoCo on non-TEE environments
+  # Generate jobs for testing CoCo on non-TEE environments (containerd and CRI-O; CRI-O runs without auto-generated policy)
   run-k8s-tests-coco-nontee:
-    name: run-k8s-tests-coco-nontee
+    name: run-k8s-tests-coco-nontee (${{ matrix.environment.container_engine }}, ${{ matrix.environment.vmm }})
     strategy:
       fail-fast: false
       matrix:
         environment: [
-          { vmm: qemu-coco-dev, snapshotter: nydus, pull_type: guest-pull },
-          { vmm: qemu-coco-dev-runtime-rs, snapshotter: nydus, pull_type: guest-pull },
-          { vmm: qemu-coco-dev, snapshotter: "", pull_type: experimental-force-guest-pull },
+          { vmm: qemu-coco-dev, snapshotter: nydus, pull_type: guest-pull, container_engine: containerd },
+          { vmm: qemu-coco-dev-runtime-rs, snapshotter: nydus, pull_type: guest-pull, container_engine: containerd },
+          { vmm: qemu-coco-dev, snapshotter: "", pull_type: experimental-force-guest-pull, container_engine: containerd },
+          { vmm: qemu-coco-dev, snapshotter: "", pull_type: guest-pull, container_engine: crio },
+          { vmm: qemu-coco-dev-runtime-rs, snapshotter: "", pull_type: guest-pull, container_engine: crio },
         ]
     runs-on: ubuntu-24.04
     permissions:
@@ -165,9 +167,10 @@ jobs:
       AUTHENTICATED_IMAGE_PASSWORD: ${{ secrets.AUTHENTICATED_IMAGE_PASSWORD }}
       SNAPSHOTTER: ${{ matrix.environment.snapshotter }}
       EXPERIMENTAL_FORCE_GUEST_PULL: ${{ matrix.environment.pull_type == 'experimental-force-guest-pull' && matrix.environment.vmm || '' }}
-      AUTO_GENERATE_POLICY: "yes"
+      AUTO_GENERATE_POLICY: ${{ matrix.environment.container_engine == 'containerd' && 'yes' || 'no' }}
       K8S_TEST_HOST_TYPE: "all"
-      CONTAINER_ENGINE: "containerd"
+      CONTAINER_ENGINE: ${{ matrix.environment.container_engine }}
+      CONTAINER_RUNTIME: ${{ matrix.environment.container_engine }}
       CONTAINER_ENGINE_VERSION: "active"
       GH_TOKEN: ${{ github.token }}
     steps:
