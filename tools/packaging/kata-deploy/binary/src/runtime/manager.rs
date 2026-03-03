@@ -162,13 +162,9 @@ pub async fn cleanup_cri_runtime(config: &Config, runtime: &str) -> Result<()> {
         return Err(anyhow::anyhow!("Unsupported runtime: {runtime}"));
     }
 
-    if config.helm_post_delete_hook {
-        log::info!("cleanup_cri_runtime: Helm post-delete hook, restarting runtime");
-        lifecycle::restart_cri_runtime(config, runtime).await?;
-        log::info!("cleanup_cri_runtime: Successfully restarted runtime");
-    } else {
-        log::info!("cleanup_cri_runtime: Not a Helm post-delete hook, skipping runtime restart");
-    }
+    log::info!("cleanup_cri_runtime: Restarting runtime");
+    lifecycle::restart_cri_runtime(config, runtime).await?;
+    log::info!("cleanup_cri_runtime: Successfully restarted runtime");
 
     log::info!("cleanup_cri_runtime: Cleanup completed");
     Ok(())

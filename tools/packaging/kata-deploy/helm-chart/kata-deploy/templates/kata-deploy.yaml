@@ -129,7 +129,7 @@ spec:
                 - "riscv64"
 {{- end }}
       hostPID: true
-      # Allow preStop (cleanup on uninstall) to complete before force-kill
+      # Allow SIGTERM cleanup (uninstall) to complete before force-kill
       terminationGracePeriodSeconds: 120
       containers:
       - name: kube-kata
@@ -304,11 +304,6 @@ spec:
           mountPath: /custom-configs/
           readOnly: true
 {{- end }}
-        # On uninstall, each DaemonSet pod runs cleanup for its node before exiting.
-        lifecycle:
-          preStop:
-            exec:
-              command: ["/usr/bin/kata-deploy", "cleanup"]
       volumes:
       - name: crio-conf
         hostPath:
