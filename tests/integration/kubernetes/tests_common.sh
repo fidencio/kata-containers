@@ -115,6 +115,14 @@ is_k3s_or_rke2() {
 	esac
 }
 
+# Return the kubelet data directory, which varies by Kubernetes distribution.
+get_kubelet_data_dir() {
+	case "${KUBERNETES:-}" in
+		k0s) echo "/var/lib/k0s/kubelet" ;;
+		*) echo "/var/lib/kubelet" ;;
+	esac
+}
+
 is_runtime_rs() {
 	[[ "${KATA_HYPERVISOR}" == *-runtime-rs ]]
 }
