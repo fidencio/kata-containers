@@ -5,6 +5,7 @@
 //
 
 pub mod container_device;
+pub mod kubelet_client;
 
 use agent::types::Device;
 use std::collections::HashMap;
