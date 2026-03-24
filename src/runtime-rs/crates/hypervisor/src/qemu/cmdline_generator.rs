@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+use crate::device::driver::{VfioDevice, VfioDeviceType};
 use crate::device::topology::{PCIePortBusPrefix, TopologyPortDevice, DEFAULT_PCIE_ROOT_BUS};
 use crate::qemu::qmp::get_qmp_socket_path;
 use crate::utils::{
@@ -2762,6 +2763,45 @@ impl<'a> QemuCmdLine<'a> {
         self.devices.push(Box::new(seccomp_sandbox));
     }
 
+    /// Add a VFIO device to the QEMU command line.
+    ///
+    /// Each [`HostDevice`] inside the [`VfioDevice`] maps to one `-device
+    /// vfio-pci` entry.  Mediated AP devices (s390x) and malformed entries are
+    /// skipped with a log message; all other types are cold-plugged onto the
+    /// PCIe port bus that the topology layer already assigned to the device.
+    ///
+    /// [`HostDevice`]: crate::device::driver::vfio::HostDevice
+    pub fn add_vfio_device(&mut self, vfio_dev: &VfioDevice) {
+        for hostdev in &vfio_dev.devices {
+            let cmdline_dev: Box<dyn ToQemuParams> = match hostdev.vfio_type {
+                VfioDeviceType::Normal => {
+                    // Normalise to the full DDDD:BB:SS.F form that QEMU expects.
+                    let bdf = if hostdev.bus_slot_func.starts_with("0000") {
+                        hostdev.bus_slot_func.clone()
+                    } else {
+                        format!("0000:{}", hostdev.bus_slot_func)
+                    };
+                    Box::new(DeviceVfioPci::new_pci(&bdf, &hostdev.hostdev_id, &vfio_dev.bus))
+                }
+                VfioDeviceType::MediatedPci => Box::new(DeviceVfioPci::new_mdev(
+                    &hostdev.sysfs_path,
+                    &hostdev.hostdev_id,
+                    &vfio_dev.bus,
+                )),
+                VfioDeviceType::MediatedAp | VfioDeviceType::Error => {
+                    info!(
+                        sl!(),
+                        "qemu cmdline: skipping unsupported vfio device type {:?} for id {}",
+                        hostdev.vfio_type,
+                        hostdev.hostdev_id,
+                    );
+                    continue;
+                }
+            };
+            self.devices.push(cmdline_dev);
+        }
+    }
+
     pub async fn build(&self) -> Result<Vec<String>> {
         let mut result = Vec::new();
 
@@ -2865,5 +2905,73 @@ impl SeccompSandbox {
 impl ToQemuParams for SeccompSandbox {
     async fn qemu_params(&self) -> Result<Vec<String>> {
         Ok(vec!["-sandbox".to_owned(), self.param.clone()])
+    }
+}
+
+/// DeviceVfioPci emits a `-device vfio-pci,...` entry on the QEMU command
+/// line.  Two variants are supported:
+///
+/// * Normal PCI passthrough (IOMMU group device):
+///   `-device vfio-pci,host=<BDF>,id=<id>,bus=<bus>`
+/// * Mediated PCI (mdev):
+///   `-device vfio-pci,sysfsdev=<path>,id=<id>,bus=<bus>`
+///
+/// The `bus` field carries the PCIe port id (e.g. `rp0` or `swdp0`) that was
+/// allocated for this device by the PCIe topology layer.  When `bus` is empty
+/// the device is placed directly on the root bus, which is the appropriate
+/// behaviour when `hotplug_vfio_on_root_bus` is set.
+#[derive(Debug, Default)]
+struct DeviceVfioPci {
+    /// Normalised BDF (`0000:BB:SS.F`) for normal PCI devices; empty for mdev.
+    host: String,
+    /// Sysfs path for mediated PCI devices; empty for normal PCI devices.
+    sysfs_path: String,
+    /// QEMU device id, used to correlate the device with its PCIe port.
+    id: String,
+    /// PCIe port bus this device is attached to (e.g. `rp0`).  May be empty
+    /// when the device is placed directly on `pcie.0`.
+    bus: String,
+}
+
+impl DeviceVfioPci {
+    fn new_pci(bdf: &str, id: &str, bus: &str) -> Self {
+        DeviceVfioPci {
+            host: bdf.to_owned(),
+            id: id.to_owned(),
+            bus: bus.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    fn new_mdev(sysfs_path: &str, id: &str, bus: &str) -> Self {
+        DeviceVfioPci {
+            sysfs_path: sysfs_path.to_owned(),
+            id: id.to_owned(),
+            bus: bus.to_owned(),
+            ..Default::default()
+        }
+    }
+}
+
+#[async_trait]
+impl ToQemuParams for DeviceVfioPci {
+    async fn qemu_params(&self) -> Result<Vec<String>> {
+        let mut params = Vec::new();
+
+        params.push("vfio-pci".to_owned());
+
+        if !self.host.is_empty() {
+            params.push(format!("host={}", self.host));
+        } else {
+            params.push(format!("sysfsdev={}", self.sysfs_path));
+        }
+
+        params.push(format!("id={}", self.id));
+
+        if !self.bus.is_empty() {
+            params.push(format!("bus={}", self.bus));
+        }
+
+        Ok(vec!["-device".to_owned(), params.join(",")])
     }
 }
