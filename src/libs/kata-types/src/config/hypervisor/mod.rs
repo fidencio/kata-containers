@@ -730,6 +730,10 @@ fn default_hypervisor_log_level() -> String {
     String::from("info")
 }
 
+fn default_no_port() -> String {
+    String::from("no-port")
+}
+
 /// Virtual machine device configuration information.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct DeviceInfo {
@@ -752,6 +756,24 @@ pub struct DeviceInfo {
     /// Enable hotplugging on root bus for devices with large PCI bars.
     #[serde(default)]
     pub hotplug_vfio_on_root_bus: bool,
+
+    /// PCIe port type for hot-plugging VFIO devices.
+    ///
+    /// Valid values: `"no-port"` (disabled), `"root-port"`, `"switch-port"`, `"bridge-port"`.
+    /// Default: `"no-port"`.
+    #[serde(default = "default_no_port")]
+    pub hot_plug_vfio: String,
+
+    /// PCIe port type for cold-plugging VFIO devices.
+    ///
+    /// Cold-plug passes VFIO devices on the QEMU command line before the VM
+    /// starts. This is used in confidential computing environments where
+    /// hot-plug would compromise the attestation.
+    ///
+    /// Valid values: `"no-port"` (disabled), `"root-port"`, `"switch-port"`, `"bridge-port"`.
+    /// Default: `"no-port"`.
+    #[serde(default = "default_no_port")]
+    pub cold_plug_vfio: String,
 
     /// Number of PCIe root ports to create during VM creation.
     ///

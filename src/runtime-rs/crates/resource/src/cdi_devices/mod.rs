@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+pub mod cdi_spec;
 pub mod container_device;
 pub mod kubelet_client;
 

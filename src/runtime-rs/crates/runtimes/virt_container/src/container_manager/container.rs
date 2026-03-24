@@ -19,6 +19,7 @@ use common::{
 use kata_sys_util::k8s::update_ephemeral_storage_type;
 use kata_types::{
     annotations::{BUNDLE_PATH_KEY, CONTAINER_TYPE_KEY, KATA_ANNO_CFG_HYPERVISOR_INIT_DATA},
+    config::TomlConfig,
     container::{update_ocispec_annotations, POD_CONTAINER, POD_SANDBOX},
     k8s::{self, container_type},
 };
@@ -26,7 +27,12 @@ use oci_spec::runtime as oci;
 
 use oci::{LinuxResources, Process as OCIProcess};
 use resource::{
-    cdi_devices::container_device::annotate_container_devices, ResourceManager, ResourceUpdateOp,
+    cdi_devices::{
+        cdi_spec::{devices_from_annotations, inject_cdi_devices},
+        container_device::annotate_container_devices,
+        kubelet_client::get_cdi_devices,
+    },
+    ResourceManager, ResourceUpdateOp,
 };
 use tokio::sync::RwLock;
 
@@ -137,6 +143,13 @@ impl Container {
             toml_config.runtime.disable_guest_empty_dir,
         )
         .context("amend spec")?;
+
+        // CDI cold-plug: inject VFIO device nodes into the OCI spec before
+        // handler_devices() processes linux.devices.  Only done for the pod
+        // sandbox container and only when cold_plug_vfio is enabled.
+        if !container_typ.is_pod_container() {
+            cold_plug_cdi_devices(&mut spec, &toml_config).await?;
+        }
 
         // get mutable root from oci spec
         let root = match spec.root_mut() {
@@ -693,6 +706,90 @@ fn amend_spec(
             linux.set_mount_label(None);
         }
     }
+
+    Ok(())
+}
+
+/// Inject CDI device nodes into the OCI spec for cold-plug VFIO passthrough.
+///
+/// Called for the pod-sandbox container only (not per-container).  Mirrors
+/// the Go runtime's `coldPlugDevices()` / `coldPlugWithAPI()` logic in
+/// `src/runtime/pkg/containerd-shim-v2/device_cold_plug.go`.
+///
+/// # Flow
+///
+/// 1. Skip if `cold_plug_vfio == "no-port"` (feature disabled).
+/// 2. If `pod_resource_api_sock` is set: query the kubelet PodResources API
+///    to obtain the CDI device names for this pod, then inject the
+///    corresponding device nodes from CDI spec files into the OCI spec.
+/// 3. Otherwise (standalone, e.g. nerdctl/podman): parse CDI annotations
+///    already present on the OCI spec and inject from CDI spec files.
+///
+/// After injection `handler_devices()` will find the `/dev/vfio/X` character
+/// devices in `linux.devices` and set them up for VFIO cold-plug.
+async fn cold_plug_cdi_devices(spec: &mut oci::Spec, toml_config: &TomlConfig) -> Result<()> {
+    // containerd CRI sandbox name/namespace annotations
+    const CONTAINERD_SANDBOX_NAME: &str = "io.kubernetes.cri.sandbox-name";
+    const CONTAINERD_SANDBOX_NS: &str = "io.kubernetes.cri.sandbox-namespace";
+    // CRI-O sandbox name/namespace annotations
+    const CRIO_SANDBOX_NAME: &str = "io.kubernetes.cri-o.KubeName";
+    const CRIO_SANDBOX_NS: &str = "io.kubernetes.cri-o.Namespace";
+
+    let hv_name = &toml_config.runtime.hypervisor_name;
+    let cold_plug_vfio = toml_config
+        .hypervisor
+        .get(hv_name)
+        .map(|hv| hv.device_info.cold_plug_vfio.as_str())
+        .unwrap_or("no-port");
+
+    if cold_plug_vfio == "no-port" {
+        return Ok(());
+    }
+
+    let annotations = spec.annotations().clone().unwrap_or_default();
+    let kubelet_sock = &toml_config.runtime.pod_resource_api_sock;
+
+    let cdi_devices = if !kubelet_sock.is_empty() {
+        // Get pod name/namespace from CRI annotations (containerd or CRI-O).
+        let pod_name = annotations
+            .get(CONTAINERD_SANDBOX_NAME)
+            .or_else(|| annotations.get(CRIO_SANDBOX_NAME))
+            .map(String::as_str)
+            .unwrap_or("");
+        let pod_ns = annotations
+            .get(CONTAINERD_SANDBOX_NS)
+            .or_else(|| annotations.get(CRIO_SANDBOX_NS))
+            .map(String::as_str)
+            .unwrap_or("");
+
+        if pod_name.is_empty() || pod_ns.is_empty() {
+            info!(
+                sl!(),
+                "cold_plug_vfio: pod name/namespace not found in annotations, skipping"
+            );
+            return Ok(());
+        }
+
+        get_cdi_devices(kubelet_sock, pod_name, pod_ns)
+            .await
+            .with_context(|| {
+                format!("cold_plug_vfio: kubelet PodResources query for {pod_ns}/{pod_name}")
+            })?
+    } else {
+        // Standalone (no kubelet): derive CDI devices from OCI spec annotations.
+        devices_from_annotations(&annotations)
+    };
+
+    if cdi_devices.is_empty() {
+        info!(sl!(), "cold_plug_vfio: no CDI devices found, skipping");
+        return Ok(());
+    }
+
+    info!(
+        sl!(),
+        "cold_plug_vfio: injecting CDI devices: {:?}", cdi_devices
+    );
+    inject_cdi_devices(spec, &cdi_devices).context("cold_plug_vfio: CDI device injection")?;
 
     Ok(())
 }

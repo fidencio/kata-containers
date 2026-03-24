@@ -16,6 +16,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use tonic::transport::{Endpoint, Uri};
+use tower::service_fn;
 
 // gRPC service/method path for the Get RPC.
 const GET_RPC_PATH: &str = "/v1.PodResourcesLister/Get";
@@ -77,11 +78,10 @@ pub async fn get_cdi_devices(
     pod_namespace: &str,
 ) -> Result<Vec<String>> {
     // tonic requires a dummy http URL; actual transport goes through the UDS connector.
-    let path = socket_path.to_owned();
-    let channel = Endpoint::try_from("http://[::]:0")
-        .context("build tonic endpoint")?
-        .connect_with_connector(tower::service_fn(move |_: Uri| {
-            tokio::net::UnixStream::connect(path.clone())
+    let uds_path = socket_path.to_owned();
+    let channel = Endpoint::from_static("http://[::]:0")
+        .connect_with_connector(service_fn(move |_: Uri| {
+            tokio::net::UnixStream::connect(uds_path.clone())
         }))
         .await
         .with_context(|| format!("connect to kubelet socket {socket_path}"))?;
@@ -95,10 +95,12 @@ pub async fn get_cdi_devices(
 
     client.ready().await.context("kubelet gRPC channel not ready")?;
 
-    let codec = tonic::codec::ProstCodec::<GetPodResourcesRequest, GetPodResourcesResponse>::default();
-    let path = http::uri::PathAndQuery::from_static(GET_RPC_PATH);
+    let codec =
+        tonic::codec::ProstCodec::<GetPodResourcesRequest, GetPodResourcesResponse>::default();
+    let rpc_path =
+        http::uri::PathAndQuery::from_static(GET_RPC_PATH);
     let response = client
-        .unary(request, path, codec)
+        .unary(request, rpc_path, codec)
         .await
         .context("PodResourcesLister/Get RPC")?;
 

@@ -18,8 +18,11 @@ async-trait = { workspace = true }
 byte-unit = "5.1.6"
 cgroups-rs = { version = "0.5.0", features = ["oci"] }
 futures = "0.3.11"
+http = "0.2"
 prost = { workspace = true }
+serde_yaml = { workspace = true }
 tonic = { workspace = true }
+tower = "0.4"
 lazy_static = { workspace = true }
 libc = { workspace = true }
 netns-rs = { workspace = true }
