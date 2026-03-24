@@ -208,6 +208,9 @@ impl QemuInner {
                         _ => info!(sl!(), "no need to add {} ports", port_type),
                     }
                 }
+                DeviceType::Vfio(vfio_dev) => {
+                    cmdline.add_vfio_device(vfio_dev);
+                }
                 _ => info!(sl!(), "qemu cmdline: unsupported device: {:?}", device),
             }
         }
