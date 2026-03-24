@@ -181,6 +181,19 @@ pub struct Runtime {
     /// If fd passthrough io is enabled, the runtime will attempt to use the specified port instead of the default port.
     #[serde(default = "default_passfd_listener_port")]
     pub passfd_listener_port: u32,
+
+    /// Path to the Kubelet PodResources gRPC API Unix socket.
+    ///
+    /// When set, the runtime uses this socket to call the kubelet's `Get` RPC
+    /// during sandbox creation to discover CDI devices allocated to the pod.
+    /// Those devices are then cold-plugged into the VM before it starts.
+    ///
+    /// This is only relevant when `cold_plug_vfio` (hypervisor config) is set
+    /// to a value other than `"no-port"`.
+    ///
+    /// Example: "/var/lib/kubelet/pod-resources/kubelet.sock"
+    #[serde(default)]
+    pub pod_resource_api_sock: String,
 }
 
 fn default_passfd_listener_port() -> u32 {

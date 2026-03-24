@@ -801,6 +801,21 @@ sandbox_bind_mounts = @DEFBINDMOUNTS@
 #
 vfio_mode = "@DEFVFIOMODE@"
 
+# pod_resource_api_sock specifies the unix socket for the Kubelet's
+# Pod Resource API. When set (together with a non-"no-port" cold_plug_vfio),
+# the runtime queries the kubelet at sandbox creation time to discover CDI
+# devices allocated to the pod and cold-plugs them into the VM.
+#
+# cold_plug_vfio (see hypervisor config) acts as a feature gate:
+#      cold_plug_vfio = no-port (default) => no cold plug
+#      cold_plug_vfio != no-port AND pod_resource_api_sock = "" => CDI
+#          annotations on the OCI spec are used directly (standalone use-case)
+#      cold_plug_vfio != no-port AND pod_resource_api_sock != "" => kubelet
+#          PodResources API is queried to determine the CDI devices
+#
+# (default: "")
+pod_resource_api_sock = ""
+
 # If enabled, the runtime will not create Kubernetes emptyDir mounts on the guest filesystem. Instead, emptyDir mounts will
 # be created on the host and shared via virtio-fs. This is potentially slower, but allows sharing of files from host to guest.
 disable_guest_empty_dir = @DEFDISABLEGUESTEMPTYDIR@
