@@ -13,10 +13,11 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     vfio_device::VfioDeviceModernHandle, vhost_user_blk::VhostUserBlkDevice, BlockConfig,
-    BlockDevice, HybridVsockDevice, Hypervisor, NetworkDevice, PCIePortDevice, ProtectionDevice,
-    ShareFsDevice, VfioDevice, VhostUserConfig, VhostUserNetDevice, VsockDevice,
-    KATA_BLK_DEV_TYPE, KATA_CCW_DEV_TYPE, KATA_MMIO_BLK_DEV_TYPE, KATA_NVDIMM_DEV_TYPE,
-    KATA_SCSI_DEV_TYPE, VIRTIO_BLOCK_CCW, VIRTIO_BLOCK_MMIO, VIRTIO_BLOCK_PCI, VIRTIO_PMEM,
+    BlockConfigModern, BlockDevice, BlockDeviceModernHandle, HybridVsockDevice, Hypervisor,
+    NetworkDevice, PCIePortDevice, ProtectionDevice, ShareFsDevice, VfioDevice, VhostUserConfig,
+    VhostUserNetDevice, VsockDevice, KATA_BLK_DEV_TYPE, KATA_CCW_DEV_TYPE,
+    KATA_MMIO_BLK_DEV_TYPE, KATA_NVDIMM_DEV_TYPE, KATA_SCSI_DEV_TYPE, VIRTIO_BLOCK_CCW,
+    VIRTIO_BLOCK_MMIO, VIRTIO_BLOCK_PCI, VIRTIO_PMEM,
 };
 
 use super::{
@@ -238,6 +239,11 @@ impl DeviceManager {
                         return Some(device_id.to_string());
                     }
                 }
+                DeviceType::BlockModern(device) => {
+                    if device.lock().await.config.path_on_host == host_path.clone() {
+                        return Some(device_id.to_string());
+                    }
+                }
                 DeviceType::VhostUserBlk(device) => {
                     if device.config.socket_path == host_path {
                         return Some(device_id.to_string());
@@ -307,6 +313,16 @@ impl DeviceManager {
                 self.create_block_device(config, device_id.clone())
                     .await
                     .context("failed to create device")?
+            }
+            DeviceConfig::BlockCfgModern(config) => {
+                if let Some(device_matched_id) = self.find_device(config.path_on_host.clone()).await
+                {
+                    return Ok(device_matched_id);
+                }
+
+                self.create_block_device_modern(config, device_id.clone())
+                    .await
+                    .context("failed to create block device modern")?
             }
             DeviceConfig::VfioCfg(config) => {
                 let mut vfio_dev_config = config.clone();
@@ -470,6 +486,56 @@ impl DeviceManager {
         Ok(Arc::new(Mutex::new(VhostUserBlkDevice::new(
             device_id,
             vhu_blk_config,
+        ))))
+    }
+
+    async fn create_block_device_modern(
+        &mut self,
+        config: &BlockConfigModern,
+        device_id: String,
+    ) -> Result<ArcMutexDevice> {
+        let mut block_config = config.clone();
+        let mut is_pmem = false;
+
+        match block_config.driver_option.as_str() {
+            VIRTIO_BLOCK_MMIO => {
+                block_config.driver_option = KATA_MMIO_BLK_DEV_TYPE.to_string();
+            }
+            VIRTIO_BLOCK_PCI => {
+                block_config.driver_option = KATA_BLK_DEV_TYPE.to_string();
+            }
+            VIRTIO_BLOCK_CCW => {
+                block_config.driver_option = KATA_CCW_DEV_TYPE.to_string();
+            }
+            VIRTIO_PMEM => {
+                block_config.driver_option = KATA_NVDIMM_DEV_TYPE.to_string();
+                is_pmem = true;
+            }
+            VIRTIO_SCSI => {
+                block_config.driver_option = KATA_SCSI_DEV_TYPE.to_string();
+            }
+            _ => {
+                return Err(anyhow!(
+                    "unsupported driver type {}",
+                    block_config.driver_option
+                ));
+            }
+        };
+
+        if let Some(virt_path) = self.get_dev_virt_path(DEVICE_TYPE_BLOCK, is_pmem)? {
+            block_config.index = virt_path.0;
+            block_config.virt_path = virt_path.1;
+        }
+
+        if block_config.path_on_host.is_empty() {
+            block_config.path_on_host =
+                get_host_path(DEVICE_TYPE_BLOCK, config.major, config.minor)
+                    .context("failed to get host path")?;
+        }
+
+        Ok(Arc::new(Mutex::new(BlockDeviceModernHandle::new(
+            device_id,
+            block_config,
         ))))
     }
 
