@@ -11,6 +11,8 @@ MACHINEACCELERATORS :=
 CPUFEATURES := pmu=off
 
 QEMUCMD := qemu-system-x86_64
+QEMUTDXEXPERIMENTALCMD := qemu-system-x86_64-tdx-experimental
+QEMUSNPEXPERIMENTALCMD := qemu-system-x86_64-snp-experimental
 
 # dragonball binary name
 DBCMD := dragonball

@@ -1,21 +1,22 @@
 # Copyright (c) 2017-2019 Intel Corporation
 # Copyright (c) 2021 Adobe Inc.
 # Copyright (c) 2024 IBM Corp.
+# Copyright (c) 2025 NVIDIA CORPORATION
 #
 # SPDX-License-Identifier: Apache-2.0
 #
 
 # XXX: WARNING: this file is auto-generated.
 # XXX:
-# XXX: Source file: "@CONFIG_QEMU_IN@"
+# XXX: Source file: "@CONFIG_QEMU_NVIDIA_GPU_IN@"
 # XXX: Project:
 # XXX:   Name: @PROJECT_NAME@
 # XXX:   Type: @PROJECT_TYPE@
 
 [hypervisor.qemu]
 path = "@QEMUPATH@"
-kernel = "@KERNELPATH_QEMU@"
-image = "@IMAGEPATH@"
+kernel = "@KERNELPATH_NV@"
+image = "@IMAGEPATH_NV@"
 machine_type = "@MACHINETYPE@"
 
 # rootfs filesystem type:
@@ -58,7 +59,7 @@ kernel_params = "@KERNELPARAMS@"
 
 # Path to the firmware.
 # If you want that qemu uses the default firmware leave this option empty
-firmware = "@FIRMWAREPATH@"
+firmware = "@FIRMWAREPATH_NV@"
 
 # Path to the firmware volume.
 # firmware TDVF or OVMF can be split into FIRMWARE_VARS.fd (UEFI variables
@@ -90,7 +91,7 @@ cpu_features = "@CPUFEATURES@"
 # < 0                             --> will be set to the actual number of physical cores
 # > 0 <= number of physical cores --> will be set to the specified number
 # > number of physical cores      --> will be set to the actual number of physical cores
-default_vcpus = @DEFVCPUS_QEMU@
+default_vcpus = @DEFAULTVCPUS_NV@
 
 # Default maximum number of vCPUs per SB/VM:
 # unspecified or == 0             --> will be set to the actual number of physical cores or to the maximum number
@@ -132,8 +133,8 @@ default_bridges = @DEFBRIDGES@
 reclaim_guest_freed_memory = false
 
 # Default memory size in MiB for SB/VM.
-# If unspecified then it will be set @DEFMEMSZ@ MiB.
-default_memory = @DEFMEMSZ@
+# If unspecified then it will be set @DEFAULTMEMORY_NV@ MiB.
+default_memory = @DEFAULTMEMORY_NV@
 #
 # Default memory slots per SB/VM.
 # If unspecified then it will be set @DEFMEMSLOTS@.
@@ -383,14 +384,14 @@ hot_plug_vfio = "no-port"
 # Enable cold-plugging of VFIO devices to a bridge-port,
 # root-port or switch-port.
 # The default setting is  "no-port", which means disabled.
-cold_plug_vfio = "no-port"
+cold_plug_vfio = "@DEFAULTVFIOPORT_NV@"
 
 # Before hot plugging a PCIe device, you need to add a pcie_root_port device.
 # Use this parameter when using some large PCI bar devices, such as Nvidia GPU
 # The value means the number of pcie_root_port
 # This value is valid when hotplug_vfio_on_root_bus is true and machine_type is "q35"
 # Default 0
-pcie_root_port = 0
+pcie_root_port = @DEFAULTPCIEROOTPORT_NV@
 
 # Before hot plugging a PCIe device onto a switch port, you need add a pcie_switch_port device fist.
 # Use this parameter when using some large PCI bar devices, such as Nvidia GPU
@@ -683,7 +684,7 @@ compact_force_times = 9223372036854775807
 # - runtime-request-timeout: The timeout value specified in the Kubelet configuration described as the link below:
 # (https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet/#:~:text=runtime%2Drequest%2Dtimeout)
 # Defaults to @DEFCREATECONTAINERTIMEOUT@ second(s)
-create_container_timeout = @DEFCREATECONTAINERTIMEOUT@
+create_container_timeout = @DEFAULTTIMEOUT_NV@
 
 [runtime]
 # If enabled, the runtime will log additional debug messages to the
@@ -814,7 +815,7 @@ vfio_mode = "@DEFVFIOMODE@"
 #          PodResources API is queried to determine the CDI devices
 #
 # (default: "")
-pod_resource_api_sock = ""
+pod_resource_api_sock = "@DEFPODRESOURCEAPISOCK_NV@"
 
 # If enabled, the runtime will not create Kubernetes emptyDir mounts on the guest filesystem. Instead, emptyDir mounts will
 # be created on the host and shared via virtio-fs. This is potentially slower, but allows sharing of files from host to guest.
