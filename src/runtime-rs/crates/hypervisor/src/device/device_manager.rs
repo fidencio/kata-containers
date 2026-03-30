@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
 use kata_sys_util::rand::RandomBytes;
@@ -12,11 +12,11 @@ use kata_types::config::hypervisor::{BlockDeviceInfo, TopologyConfigInfo, VIRTIO
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
-    vhost_user_blk::VhostUserBlkDevice, BlockConfig, BlockDevice, HybridVsockDevice, Hypervisor,
-    NetworkDevice, PCIePortDevice, ProtectionDevice, ShareFsDevice, VfioDevice, VhostUserConfig,
-    VhostUserNetDevice, VsockDevice, KATA_BLK_DEV_TYPE, KATA_CCW_DEV_TYPE, KATA_MMIO_BLK_DEV_TYPE,
-    KATA_NVDIMM_DEV_TYPE, KATA_SCSI_DEV_TYPE, VIRTIO_BLOCK_CCW, VIRTIO_BLOCK_MMIO,
-    VIRTIO_BLOCK_PCI, VIRTIO_PMEM,
+    vfio_device::VfioDeviceModernHandle, vhost_user_blk::VhostUserBlkDevice, BlockConfig,
+    BlockDevice, HybridVsockDevice, Hypervisor, NetworkDevice, PCIePortDevice, ProtectionDevice,
+    ShareFsDevice, VfioDevice, VhostUserConfig, VhostUserNetDevice, VsockDevice,
+    KATA_BLK_DEV_TYPE, KATA_CCW_DEV_TYPE, KATA_MMIO_BLK_DEV_TYPE, KATA_NVDIMM_DEV_TYPE,
+    KATA_SCSI_DEV_TYPE, VIRTIO_BLOCK_CCW, VIRTIO_BLOCK_MMIO, VIRTIO_BLOCK_PCI, VIRTIO_PMEM,
 };
 
 use super::{
@@ -231,6 +231,13 @@ impl DeviceManager {
                         return Some(device_id.to_string());
                     }
                 }
+                DeviceType::VfioModern(device) => {
+                    if device.lock().await.config.iommu_group_devnode
+                        == PathBuf::from(host_path.clone())
+                    {
+                        return Some(device_id.to_string());
+                    }
+                }
                 DeviceType::VhostUserBlk(device) => {
                     if device.config.socket_path == host_path {
                         return Some(device_id.to_string());
@@ -313,6 +320,27 @@ impl DeviceManager {
                 Arc::new(Mutex::new(VfioDevice::new(
                     device_id.clone(),
                     &vfio_dev_config,
+                )?))
+            }
+            DeviceConfig::VfioModernCfg(config) => {
+                let dev_host_path = config.host_path.clone();
+                if let Some(device_matched_id) = self.find_device(dev_host_path.clone()).await {
+                    return Ok(device_matched_id);
+                }
+
+                let virt_path = self.get_dev_virt_path(&config.dev_type, false)?;
+                let mut vfio_base = config.clone();
+                let path = PathBuf::from(&dev_host_path);
+                if dev_host_path.contains("/dev/vfio/devices/") {
+                    vfio_base.iommu_device_node = Some(path);
+                } else {
+                    vfio_base.iommu_group_devnode = path;
+                }
+                vfio_base.virt_path = virt_path;
+
+                Arc::new(Mutex::new(VfioDeviceModernHandle::new(
+                    device_id.clone(),
+                    &vfio_base,
                 )?))
             }
             DeviceConfig::VhostUserBlkCfg(config) => {

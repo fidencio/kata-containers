@@ -149,11 +149,7 @@ impl Device for BlockDevice {
         }
 
         match h.add_device(DeviceType::Block(self.clone())).await {
-            Ok(dev) => {
-                // Update device info with the one received from device attach
-                if let DeviceType::Block(blk) = dev {
-                    self.config = blk.config;
-                }
+            Ok(_dev) => {
                 Ok(())
             }
             Err(e) => {

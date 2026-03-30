@@ -22,6 +22,7 @@ pub use vfio::{
     bind_device_to_host, bind_device_to_vfio, get_vfio_device, HostDevice, VfioBusMode, VfioConfig,
     VfioDevice,
 };
+pub use vfio_device::{VfioDeviceBase, VfioDeviceModern, VfioDeviceModernHandle};
 pub use vhost_user::{VhostUserConfig, VhostUserDevice, VhostUserType};
 pub use vhost_user_net::VhostUserNetDevice;
 pub use virtio_blk::{

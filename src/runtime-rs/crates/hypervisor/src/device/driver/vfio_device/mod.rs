@@ -3,9 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-pub mod core;
+mod core;
+mod device;
 
 pub use core::{discover_vfio_group_device, VfioDevice};
+pub use device::VfioDeviceBase;
+pub use device::VfioDeviceModern;
+pub use device::VfioDeviceModernHandle;
 
 use std::fs;
 use std::path::Path;

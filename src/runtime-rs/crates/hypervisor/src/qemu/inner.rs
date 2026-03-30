@@ -811,17 +811,17 @@ use crate::device::DeviceType;
 
 // device manager part of Hypervisor
 impl QemuInner {
-    pub(crate) async fn add_device(&mut self, mut device: DeviceType) -> Result<DeviceType> {
+    pub(crate) async fn add_device(&mut self, device: DeviceType) -> Result<()> {
         info!(sl!(), "QemuInner::add_device() {}", device);
         let is_qemu_ready_to_hotplug = self.qmp.is_some();
         if is_qemu_ready_to_hotplug {
             // hypervisor is running already
-            device = self.hotplug_device(device)?;
+            self.hotplug_device(device)?;
         } else {
             // store the device to coldplug it later, on hypervisor launch
             self.devices.push(device.clone());
         }
-        Ok(device)
+        Ok(())
     }
 
     pub(crate) async fn remove_device(&mut self, device: DeviceType) -> Result<()> {
@@ -832,7 +832,7 @@ impl QemuInner {
         ))
     }
 
-    fn hotplug_device(&mut self, device: DeviceType) -> Result<DeviceType> {
+    fn hotplug_device(&mut self, device: DeviceType) -> Result<()> {
         let qmp = match self.qmp {
             Some(ref mut qmp) => qmp,
             None => return Err(anyhow!("QMP not initialized")),
@@ -873,7 +873,6 @@ impl QemuInner {
                     }
                 }
 
-                return Ok(DeviceType::Block(block_device));
             }
             DeviceType::Vfio(mut vfiodev) => {
                 // FIXME: the first one might not the true device we want to passthrough.
@@ -893,11 +892,10 @@ impl QemuInner {
                     &vfiodev.bus,
                 )?;
 
-                return Ok(DeviceType::Vfio(vfiodev));
             }
             _ => info!(sl!(), "hotplugging of {:#?} is unsupported", device),
         }
-        Ok(device)
+        Ok(())
     }
 }
 

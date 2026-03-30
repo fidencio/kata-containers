@@ -5,8 +5,10 @@
 //
 
 use std::fmt;
+use std::sync::Arc;
 
 use crate::device::driver::vhost_user_blk::VhostUserBlkDevice;
+use crate::vfio_device::{VfioDeviceBase, VfioDeviceModern};
 use crate::{
     BlockConfig, BlockDevice, HybridVsockConfig, HybridVsockDevice, Hypervisor as hypervisor,
     NetworkConfig, NetworkDevice, PCIePortDevice, PortDeviceConfig, ProtectionDevice,
@@ -15,6 +17,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
+use tokio::sync::Mutex;
 
 use self::topology::PCIeTopology;
 
@@ -34,6 +37,7 @@ pub enum DeviceConfig {
     VhostUserNetworkCfg(VhostUserConfig),
     ShareFsCfg(ShareFsConfig),
     VfioCfg(VfioConfig),
+    VfioModernCfg(VfioDeviceBase),
     VsockCfg(VsockConfig),
     HybridVsockCfg(HybridVsockConfig),
     ProtectionDevCfg(ProtectionDeviceConfig),
@@ -45,6 +49,7 @@ pub enum DeviceType {
     Block(BlockDevice),
     VhostUserBlk(VhostUserBlkDevice),
     Vfio(VfioDevice),
+    VfioModern(Arc<Mutex<VfioDeviceModern>>),
     Network(NetworkDevice),
     VhostUserNetwork(VhostUserNetDevice),
     ShareFs(ShareFsDevice),
