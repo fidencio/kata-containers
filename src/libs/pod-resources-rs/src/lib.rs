@@ -6,8 +6,6 @@
 pub mod pod_resources;
 
 use anyhow::{Result, anyhow};
-use cdi::specs::config::DeviceNode;
-// use cdi::container_edits::DeviceNode;
 use cdi::cache::{CdiOption, new_cache, with_auto_refresh};
 use cdi::spec_dirs::with_spec_dirs;
 use container_device_interface as cdi;
@@ -16,11 +14,7 @@ use slog::info;
 use std::sync::Arc;
 use tokio::time;
 
-/// DEFAULT_DYNAMIC_CDI_SPEC_PATH is the default directory for dynamic CDI Specs,
-/// which can be overridden by specifying a different path when creating the cache.
 const DEFAULT_DYNAMIC_CDI_SPEC_PATH: &str = "/var/run/cdi";
-/// DEFAULT_STATIC_CDI_SPEC_PATH is the default directory for static CDI Specs,
-/// which can be overridden by specifying a different path when creating the cache.
 const DEFAULT_STATIC_CDI_SPEC_PATH: &str = "/etc/cdi";
 
 #[macro_export]
@@ -30,30 +24,31 @@ macro_rules! sl {
     };
 }
 
+/// Resolve CDI fully-qualified device names into host device paths.
+///
+/// Scans the CDI spec directories, looks up each FQN in the cache, and
+/// returns the device node paths (e.g. "/dev/vfio/42") for injection.
 pub async fn handle_cdi_devices(
     devices: &[String],
     _cdi_timeout: time::Duration,
-) -> Result<Vec<DeviceNode>> {
+) -> Result<Vec<String>> {
     if devices.is_empty() {
         info!(sl!(), "no pod CDI devices requested.");
         return Ok(vec![]);
     }
-    // Explicitly set the cache options to disable auto-refresh and
-    // to use the default spec dirs for dynamic and static CDI Specs
-    let options: Vec<CdiOption> = vec![with_auto_refresh(false), with_spec_dirs(&[DEFAULT_DYNAMIC_CDI_SPEC_PATH, DEFAULT_STATIC_CDI_SPEC_PATH])];
+
+    let options: Vec<CdiOption> = vec![
+        with_auto_refresh(false),
+        with_spec_dirs(&[DEFAULT_DYNAMIC_CDI_SPEC_PATH, DEFAULT_STATIC_CDI_SPEC_PATH]),
+    ];
     let cache: Arc<std::sync::Mutex<cdi::cache::Cache>> = new_cache(options);
 
-    let target_devices = {
-        let mut target_devices = vec![];
-        // Lock cache within this scope, std::sync::Mutex has no Send
-        // and await will not work with time::sleep
+    let paths = {
+        let mut paths = vec![];
         let mut cache = cache.lock().unwrap();
-        match cache.refresh() {
-            Ok(_) => {}
-            Err(e) => {
-                return Err(anyhow!("Refreshing cache failed: {:?}", e));
-            }
-        }
+        cache
+            .refresh()
+            .map_err(|e| anyhow!("Refreshing cache failed: {:?}", e))?;
 
         for dev in devices.iter() {
             info!(sl!(), "Requested CDI device with FQN: {}", dev);
@@ -65,18 +60,27 @@ pub async fn handle_cdi_devices(
                         device.get_qualified_name()
                     );
                     if let Some(devnodes) = device.edits().container_edits.device_nodes {
-                        target_devices.extend(devnodes.iter().cloned());
+                        for dn in &devnodes {
+                            let json = serde_json::to_value(dn)
+                                .map_err(|e| anyhow!("failed to serialize DeviceNode: {e}"))?;
+                            if let Some(p) = json.get("path").and_then(|v| v.as_str()) {
+                                paths.push(p.to_owned());
+                            }
+                        }
                     }
                 }
                 None => {
-                    return Err(anyhow!("Failed to get device node for CDI device: {} in cache", dev));
+                    return Err(anyhow!(
+                        "Failed to get device node for CDI device: {} in cache",
+                        dev
+                    ));
                 }
             }
         }
 
-        target_devices
+        paths
     };
-    info!(sl!(), "target CDI devices to inject: {:?}", target_devices);
+    info!(sl!(), "target CDI device paths to inject: {:?}", paths);
 
-    Ok(target_devices)
+    Ok(paths)
 }
