@@ -7,6 +7,7 @@
 mod port_device;
 mod protection_device;
 mod vfio;
+pub mod vfio_device;
 mod vhost_user;
 pub mod vhost_user_blk;
 mod vhost_user_net;
