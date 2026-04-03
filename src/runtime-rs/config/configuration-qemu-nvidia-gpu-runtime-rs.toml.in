@@ -26,7 +26,8 @@ rootfs_type = @DEFROOTFSTYPE@
 
 # Block storage driver to be used for the VM rootfs is backed
 # by a block device. This is virtio-blk-pci, virtio-blk-mmio or nvdimm
-vm_rootfs_driver = "@VMROOTFSDRIVER_QEMU@"
+# (default @VMROOTFSDRIVER_NV@ via Makefile VMROOTFSDRIVER_NV)
+vm_rootfs_driver = "@VMROOTFSDRIVER_NV@"
 
 # Enable running QEMU VMM as a non-root user.
 # By default QEMU VMM run as root. When this is set to true, QEMU VMM process runs as
@@ -83,7 +84,7 @@ machine_accelerators = "@MACHINEACCELERATORS@"
 # Another note: enabling this feature may reduce performance, you may enable
 # /proc/sys/net/core/bpf_jit_enable to reduce the impact. see https://man7.org/linux/man-pages/man8/bpfc.8.html
 # Recommended value when enabling: "on,obsolete=deny,spawn=deny,resourcecontrol=deny"
-seccompsandbox = "@DEFSECCOMPSANDBOXPARAM@"
+seccomp_sandbox = "@DEFSECCOMPSANDBOXPARAM@"
 
 # CPU features
 # comma-separated list of cpu features to pass to the cpu
@@ -351,7 +352,7 @@ enable_debug = false
 #
 # If set to the empty string "", no extra monitor socket is added. This is
 # the default.
-extra_monitor_socket = ""
+dbg_monitor_socket = ""
 
 # Disable the customizations done in the runtime when it detects
 # that it is running on top a VMM. This will result in the runtime
@@ -566,18 +567,15 @@ kernel_modules = []
 
 debug_console_enabled = false
 
-# Agent dial timeout in millisecond.
-# (default: 10)
-dial_timeout_ms = 10
+# Agent dial backoff in milliseconds (retry delay for hybrid vsock / remote;
+# vsock uses this as initial backoff, clamped by the agent implementation).
+# Makefile DEFDIALTIMEOUTMS_NV; total patience is reconnect_timeout_ms.
+dial_timeout_ms = @DEFDIALTIMEOUTMS_NV@
 
-# Agent reconnect timeout in millisecond.
-# Retry times = reconnect_timeout_ms / dial_timeout_ms (default: 300)
-# If you find pod cannot connect to the agent when starting, please
-# consider increasing this value to increase the retry times.
-# You'd better not change the value of dial_timeout_ms, unless you have an
-# idea of what you are doing.
-# (default: 3000)
-reconnect_timeout_ms = 3000
+# Total time budget (ms) for the agent client to connect (vsock deadline).
+# Makefile DEFRECONNECTTIMEOUTMS_NV (default 1200000 ms = Go qemu-nvidia-gpu dial_timeout 1200 s).
+# For hybrid vsock, retry count is reconnect_timeout_ms / dial_timeout_ms.
+reconnect_timeout_ms = @DEFRECONNECTTIMEOUTMS_NV@
 
 [agent.@PROJECT_TYPE@.mem_agent]
 # Control the mem-agent function enable or disable.

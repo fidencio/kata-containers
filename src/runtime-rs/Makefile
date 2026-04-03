@@ -406,6 +406,12 @@ ifneq (,$(QEMUCMD))
     DEFVFIOMODE_NV := guest-kernel
     DEFKUBELETROOTDIR := /var/lib/kubelet
     DEFPODRESOURCEAPISOCK_NV := "$(DEFKUBELETROOTDIR)/pod-resources/kubelet.sock"
+    # NVIDIA profile: rootfs block driver (avoid virtio-pmem/DAX for this stack)
+    VMROOTFSDRIVER_NV := virtio-blk-pci
+    # Agent client: hybrid vsock retry delay (ms); vsock path uses this as initial backoff (clamped in agent)
+    DEFDIALTIMEOUTMS_NV := 1000
+    # Go qemu-nvidia-gpu dial_timeout is 1200s; runtime-rs uses ms for reconnect_timeout_ms
+    DEFRECONNECTTIMEOUTMS_NV := 1200000
 
     KERNEL_NAME_QEMU_SE = kata-containers-se.img
     KERNELPATH_QEMU_SE = $(KERNELDIR)/$(KERNEL_NAME_QEMU_SE)
@@ -680,6 +686,9 @@ USER_VARS += DEFSTATICRESOURCEMGMT_NV
 USER_VARS += DEFVFIOMODE_NV
 USER_VARS += DEFKUBELETROOTDIR
 USER_VARS += DEFPODRESOURCEAPISOCK_NV
+USER_VARS += VMROOTFSDRIVER_NV
+USER_VARS += DEFDIALTIMEOUTMS_NV
+USER_VARS += DEFRECONNECTTIMEOUTMS_NV
 
 SOURCES := \
   $(shell find . 2>&1 | grep -E '.*\.rs$$') \
