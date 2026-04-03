@@ -8050,6 +8050,7 @@ dependencies = [
  "async-trait",
  "awaitgroup",
  "common",
+ "container-device-interface",
  "containerd-shim-protos",
  "hypervisor",
  "kata-sys-util",

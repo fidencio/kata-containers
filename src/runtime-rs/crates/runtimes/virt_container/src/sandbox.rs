@@ -48,6 +48,7 @@ use kata_types::config::{hypervisor::Factory, TomlConfig};
 use kata_types::initdata::{calculate_initdata_digest, ProtectedPlatform};
 use oci_spec::runtime as oci;
 use persist::{self, sandbox_persist::Persist};
+use container_device_interface::specs::config::DeviceNode as CdiSpecDeviceNode;
 use pod_resources_rs::handle_cdi_devices;
 use protobuf::SpecialFields;
 use resource::coco_data::initdata::{
@@ -66,6 +67,17 @@ use tokio::time;
 use tracing::instrument;
 
 pub(crate) const VIRTCONTAINER: &str = "virt_container";
+
+/// Host path for CDI device nodes (`hostPath` when set, else `path`). Needed because
+/// `container_device_interface::specs::config::DeviceNode` fields are crate-private.
+fn cdi_device_node_host_path(dn: &CdiSpecDeviceNode) -> Option<String> {
+    serde_json::to_value(dn).ok().and_then(|v| {
+        v.get("hostPath")
+            .or_else(|| v.get("path"))
+            .and_then(|p| p.as_str())
+            .map(String::from)
+    })
+}
 
 pub struct SandboxRestoreArgs {
     pub sid: String,
@@ -296,7 +308,10 @@ impl VirtSandbox {
         let device_nodes =
             handle_cdi_devices(&cdi_devices, time::Duration::from_secs(100))
                 .await?;
-        let paths: Vec<String> = device_nodes.iter().map(|dn| dn.path.clone()).collect();
+        let paths: Vec<String> = device_nodes
+            .iter()
+            .filter_map(cdi_device_node_host_path)
+            .collect();
 
         // FQN: nvidia.com/gpu=X
         let mut vfio_configs = Vec::new();
