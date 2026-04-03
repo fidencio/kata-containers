@@ -30,6 +30,7 @@ const ALL_SHIMS: &[&str] = &[
     "qemu-coco-dev",
     "qemu-coco-dev-runtime-rs",
     "qemu-nvidia-gpu",
+    "qemu-nvidia-gpu-runtime-rs",
     "qemu-nvidia-gpu-snp",
     "qemu-nvidia-gpu-tdx",
     "qemu-runtime-rs",
@@ -955,6 +956,7 @@ mod tests {
     #[case("qemu-coco-dev", "qemu")]
     #[case("qemu-cca", "qemu")]
     #[case("qemu-nvidia-gpu", "qemu")]
+    #[case("qemu-nvidia-gpu-runtime-rs", "qemu")]
     #[case("qemu-nvidia-gpu-tdx", "qemu")]
     #[case("qemu-nvidia-gpu-snp", "qemu")]
     #[case("qemu-runtime-rs", "qemu")]
