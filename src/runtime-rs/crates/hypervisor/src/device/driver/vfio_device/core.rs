@@ -23,23 +23,6 @@ const SYS_CLASS_VFIO_DEV: &str = "/sys/class/vfio-dev";
 // const SYS_MDEV_DEVS: &str = "/sys/bus/mdev/devices";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum VfioBackend {
-    /// Legacy interface using container and group FDs
-    Legacy(VfioLegacyBackend),
-    /// Modern IOMMUFD interface using device-centric cdevs
-    Iommufd(VfioIommufdBackend),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VfioLegacyBackend {
-    /// Path to the VFIO container (/dev/vfio/vfio)
-    pub vfio_ctl: PathBuf,
-    /// Path to the specific IOMMU group node (/dev/vfio/<gid>)
-    pub group_devnode: PathBuf,
-    pub group_id: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VfioIommufdBackend {
     /// Host global IOMMUFD device node (/dev/iommu)
     pub iommufd_dev: PathBuf,
