@@ -18,6 +18,12 @@ pub use shared_mount::SharedMount;
 /// Type of runtime VirtContainer.
 pub const RUNTIME_NAME_VIRTCONTAINER: &str = "virt_container";
 
+/// emptydir_mode value: share the emptyDir via the shared filesystem (default).
+pub const EMPTYDIR_MODE_SHARED_FS: &str = "shared-fs";
+
+/// emptydir_mode value: plug an encrypted block device (LUKS2 via CDH) for each emptyDir.
+pub const EMPTYDIR_MODE_BLOCK_ENCRYPTED: &str = "block-encrypted";
+
 /// Kata runtime configuration information.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Runtime {
@@ -134,6 +140,21 @@ pub struct Runtime {
     #[serde(default)]
     pub disable_guest_empty_dir: bool,
 
+    /// Specifies how Kubernetes emptyDir volumes are handled.
+    ///
+    /// Options:
+    ///
+    ///   - shared-fs (default)
+    ///     Shares the emptyDir folder with the guest using the method given
+    ///     by the `shared_fs` setting.
+    ///
+    ///   - block-encrypted
+    ///     Plugs a block device to be encrypted in the guest using LUKS2
+    ///     via the Confidential Data Hub (CDH).
+    ///
+    #[serde(default)]
+    pub emptydir_mode: String,
+
     /// Determines how VFIO devices should be be presented to the container.
     ///
     /// Options:
@@ -181,6 +202,26 @@ pub struct Runtime {
     /// If fd passthrough io is enabled, the runtime will attempt to use the specified port instead of the default port.
     #[serde(default = "default_passfd_listener_port")]
     pub passfd_listener_port: u32,
+
+    /// pod_resource_api_sock specifies the unix socket for the Kubelet's
+    /// PodResource API endpoint. If empty, kubernetes based cold plug
+    /// will not be attempted. In order for this feature to work, the
+    /// KubeletPodResourcesGet featureGate must be enabled in Kubelet,
+    /// if using Kubelet older than 1.34.
+
+    /// The pod resource API's socket is relative to the Kubelet's root-dir,
+    /// which is defined by the cluster admin, and its location is:
+    /// ${KubeletRootDir}/pod-resources/kubelet.sock
+
+    /// cold_plug_vfio(see hypervisor config) acts as a feature gate:
+    ///      cold_plug_vfio = no_port (default) => no cold plug
+    ///      cold_plug_vfio != no_port AND pod_resource_api_sock = "" => need
+    ///              explicit CDI annotation for cold plug (applies mainly
+    ///              to non-k8s cases)
+    ///      cold_plug_vfio != no_port AND pod_resource_api_sock != "" => kubelet
+    ///              based cold plug.
+    #[serde(default)]
+    pub pod_resource_api_sock: String,
 }
 
 fn default_passfd_listener_port() -> u32 {
@@ -230,6 +271,17 @@ impl ConfigOps for Runtime {
         if !vfio_mode.is_empty() && vfio_mode != "vfio" && vfio_mode != "guest-kernel" {
             return Err(std::io::Error::other(format!(
                 "Invalid vfio_mode `{vfio_mode}` in configuration file",
+            )));
+        }
+
+        let emptydir_mode = &conf.runtime.emptydir_mode;
+        if !emptydir_mode.is_empty()
+            && emptydir_mode != EMPTYDIR_MODE_SHARED_FS
+            && emptydir_mode != EMPTYDIR_MODE_BLOCK_ENCRYPTED
+        {
+            return Err(std::io::Error::other(format!(
+                "Invalid emptydir_mode `{emptydir_mode}` in configuration file, \
+                 allowed values: \"{EMPTYDIR_MODE_SHARED_FS}\", \"{EMPTYDIR_MODE_BLOCK_ENCRYPTED}\"",
             )));
         }
 

@@ -82,7 +82,7 @@ auto_generate_policy_enabled() {
 
 is_coco_platform() {
 	case "${KATA_HYPERVISOR}" in
-		"qemu-tdx"|"qemu-snp"|"qemu-snp-runtime-rs"|"qemu-coco-dev"|"qemu-coco-dev-runtime-rs"|"qemu-nvidia-gpu-tdx"|"qemu-nvidia-gpu-snp")
+		"qemu-tdx"|"qemu-snp"|"qemu-snp-runtime-rs"|"qemu-coco-dev"|"qemu-coco-dev-runtime-rs"|"qemu-nvidia-gpu-tdx"|"qemu-nvidia-gpu-snp"|"qemu-nvidia-gpu-tdx-runtime-rs"|"qemu-nvidia-gpu-snp-runtime-rs")
 			return 0
 			;;
 		*)
@@ -157,10 +157,6 @@ install_genpolicy_drop_ins() {
 		cp "${examples_dir}/20-experimental-force-guest-pull-drop-in.json" "${settings_d}/"
 	fi
 
-	# 20-* runtime-rs overlay (disable encrypted emptyDir, not supported yet)
-	if is_runtime_rs; then
-		cp "${examples_dir}/20-runtime-rs-drop-in.json" "${settings_d}/"
-	fi
 }
 
 # If auto-generated policy testing is enabled, make a copy of the genpolicy settings
