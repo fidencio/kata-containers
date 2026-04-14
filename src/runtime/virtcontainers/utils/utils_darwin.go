@@ -22,3 +22,7 @@ func getHostNUMANodes() ([]int, error) {
 func getHostNUMANodeCPUs(nodeId int) (string, error) {
 	return "", nil
 }
+
+func getHostNUMADistance(hostNodes string) string {
+	return ""
+}

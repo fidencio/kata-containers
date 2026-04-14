@@ -220,3 +220,22 @@ func getHostNUMANodeCPUs(nodeId int) (string, error) {
 	}
 	return strings.TrimSuffix(string(data), "\n"), nil
 }
+
+// getHostNUMADistance reads the distance row for the first host NUMA node
+// in the given hostNodes specifier (e.g. "0" or "0-1").
+func getHostNUMADistance(hostNodes string) string {
+	nodeSet, err := cpuset.Parse(hostNodes)
+	if err != nil {
+		return ""
+	}
+	ids := nodeSet.ToSlice()
+	if len(ids) == 0 {
+		return ""
+	}
+	fileName := fmt.Sprintf("/sys/devices/system/node/node%d/distance", ids[0])
+	data, err := os.ReadFile(fileName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(string(data), "\n")
+}

@@ -21,6 +21,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -325,8 +326,8 @@ func (q *qemu) setup(ctx context.Context, id string, hypervisorConfig *Hyperviso
 	return nil
 }
 
-func (q *qemu) cpuTopology() govmmQemu.SMP {
-	return q.arch.cpuTopology(q.config.NumVCPUs(), q.config.DefaultMaxVCPUs, q.config.NumGuestNUMANodes())
+func (q *qemu) cpuTopology(effectiveNUMANodes uint32) govmmQemu.SMP {
+	return q.arch.cpuTopology(q.config.NumVCPUs(), q.config.DefaultMaxVCPUs, effectiveNUMANodes)
 }
 
 func (q *qemu) memoryTopology() (govmmQemu.Memory, error) {
@@ -337,6 +338,124 @@ func (q *qemu) memoryTopology() (govmmQemu.Memory, error) {
 	}
 
 	return q.arch.memoryTopology(memMb, 0, 0), nil
+}
+
+func (q *qemu) buildNUMATopology() ([]govmmQemu.NUMANode, []govmmQemu.NUMADist, error) {
+	numaNodes := q.config.GuestNUMANodes
+	if len(numaNodes) <= 1 {
+		return nil, nil, nil
+	}
+
+	switch goruntime.GOARCH {
+	case "amd64", "arm64":
+	default:
+		return nil, nil, fmt.Errorf("multi-NUMA not supported on architecture %s", goruntime.GOARCH)
+	}
+
+	// NUMA requires static_sandbox_resource_mgmt=true, which guarantees
+	// NumVCPUs == DefaultMaxVCPUs (set in oci/utils.go). All boot vCPUs
+	// are present at VM start, so the per-node CPU ranges below are valid.
+	//
+	// cpuTopology() rounds MaxCPUs up to (numNUMANodes * coresPerSocket)
+	// so that QEMU's SMP topology is consistent. We must cover all CPU
+	// slots in the NUMA map, otherwise QEMU warns about CPUs not present
+	// in any NUMA node. Apply the same ceiling here.
+	numNodes := uint32(len(numaNodes))
+	if q.config.DefaultMaxVCPUs < numNodes {
+		hvLogger.WithFields(logrus.Fields{
+			"vcpus":      q.config.DefaultMaxVCPUs,
+			"numa-nodes": numNodes,
+		}).Warn("DefaultMaxVCPUs < NUMA node count; skipping multi-NUMA topology")
+		return nil, nil, nil
+	}
+	coresPerSocket := (q.config.DefaultMaxVCPUs + numNodes - 1) / numNodes
+	maxVCPUs := numNodes * coresPerSocket
+
+	vcpusPerNode, err := utils.DistributeVCPUsProportionally(numaNodes, maxVCPUs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to distribute vCPUs across NUMA nodes: %w", err)
+	}
+
+	memMb := uint64(q.config.MemorySize)
+
+	var memAlign uint64 = 1
+	if q.config.HugePages {
+		memAlign = 2
+	}
+
+	backendType := "memory-backend-ram"
+	backendPath := ""
+	if q.config.HugePages {
+		backendType = "memory-backend-file"
+		backendPath = "/dev/hugepages"
+	} else if q.config.SharedFS == config.VirtioFS || q.config.SharedFS == config.VirtioFSNydus ||
+		q.config.FileBackedMemRootDir != "" {
+		backendType = "memory-backend-file"
+		if q.config.FileBackedMemRootDir != "" {
+			backendPath = q.config.FileBackedMemRootDir
+		} else {
+			backendPath = fallbackFileBackedMemDir
+		}
+	}
+	if backendPath != "" {
+		if _, err := os.Stat(backendPath); err != nil {
+			return nil, nil, fmt.Errorf("NUMA memory backend path %q does not exist: %w", backendPath, err)
+		}
+	}
+
+	// Distribute memory proportionally to vCPU counts, aligned to memAlign.
+	memPerNode := make([]uint64, numNodes)
+	var memAssigned uint64
+	for i := uint32(0); i < numNodes; i++ {
+		raw := memMb * uint64(vcpusPerNode[i]) / uint64(maxVCPUs)
+		memPerNode[i] = (raw / memAlign) * memAlign
+		if memPerNode[i] == 0 {
+			memPerNode[i] = memAlign
+		}
+		memAssigned += memPerNode[i]
+	}
+	// Give the remainder to the last node (must also be aligned).
+	if memAssigned < memMb {
+		remainder := memMb - memAssigned
+		if remainder%memAlign != 0 {
+			return nil, nil, fmt.Errorf("MemorySize (%d MiB) cannot be evenly distributed across %d NUMA nodes with %d MiB alignment",
+				memMb, numNodes, memAlign)
+		}
+		memPerNode[numNodes-1] += remainder
+	} else if memAssigned > memMb {
+		return nil, nil, fmt.Errorf("MemorySize (%d MiB) cannot be evenly distributed across %d NUMA nodes with %d MiB alignment",
+			memMb, numNodes, memAlign)
+	}
+
+	var nodes []govmmQemu.NUMANode
+	var cpuOffset uint32
+	for i, gn := range numaNodes {
+		startCPU := cpuOffset
+		endCPU := startCPU + vcpusPerNode[i] - 1
+		cpuOffset = endCPU + 1
+		cpuRange := fmt.Sprintf("%d-%d", startCPU, endCPU)
+
+		nodes = append(nodes, govmmQemu.NUMANode{
+			NodeID:         uint32(i),
+			CPUs:           cpuRange,
+			MemSize:        fmt.Sprintf("%dM", memPerNode[i]),
+			HostNodes:      gn.HostNodes,
+			MemBackendType: backendType,
+			MemBackendPath: backendPath,
+		})
+	}
+
+	var dists []govmmQemu.NUMADist
+	hostDists := utils.GetHostNUMADistances(numaNodes)
+	for _, hd := range hostDists {
+		dists = append(dists, govmmQemu.NUMADist{
+			Src: hd.Src,
+			Dst: hd.Dst,
+			Val: hd.Val,
+		})
+	}
+
+	return nodes, dists, nil
 }
 
 func (q *qemu) qmpSocketPath(id string) (string, error) {
@@ -596,7 +715,13 @@ func (q *qemu) CreateVM(ctx context.Context, id string, network Network, hypervi
 		return err
 	}
 
-	smp := q.cpuTopology()
+	numaNodes, numaDists, err := q.buildNUMATopology()
+	if err != nil {
+		return err
+	}
+
+	effectiveNUMANodes := uint32(len(numaNodes))
+	smp := q.cpuTopology(effectiveNUMANodes)
 
 	memory, err := q.memoryTopology()
 	if err != nil {
@@ -717,6 +842,8 @@ func (q *qemu) CreateVM(ctx context.Context, id string, network Network, hypervi
 		QMPSockets:     qmpSockets,
 		Knobs:          knobs,
 		Incoming:       incoming,
+		NUMANodes:      numaNodes,
+		NUMADists:      numaDists,
 		VGA:            "none",
 		GlobalParam:    "kvm-pit.lost_tick_policy=discard",
 		Bios:           firmwarePath,
