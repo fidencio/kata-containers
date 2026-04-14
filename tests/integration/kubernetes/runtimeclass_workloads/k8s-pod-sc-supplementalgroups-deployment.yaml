@@ -33,7 +33,7 @@ spec:
           - 999
       containers:
       - name: master
-        image: quay.io/kata-containers/test-images/opstree/redis:sha256-2642c7b07713df6897fa88cbe6db85170690cf3650018ceb2ab16cfa0b4f8d48
+        image: quay.io/opstree/redis:v7.0.15@sha256:284c5a51803da9483d66d4f458b1fa9e8b8a67a6e55b9793a0b005cd39239356
         resources:
           requests:
             cpu: 100m
