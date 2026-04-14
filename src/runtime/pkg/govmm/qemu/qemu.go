@@ -152,7 +152,7 @@ const (
 
 func isDimmSupported(config *Config) bool {
 	switch runtime.GOARCH {
-	case "amd64", "386", "ppc64le", "arm64":
+	case "amd64", "ppc64le", "arm64":
 		if config != nil && config.Machine.Type == MachineTypeMicrovm {
 			// microvm does not support NUMA
 			return false
@@ -2689,7 +2689,8 @@ type SMP struct {
 	Sockets uint32
 
 	// MaxCPUs is the maximum number of VCPUs that a VM can have.
-	// This value, if non-zero, MUST BE equal to or greater than CPUs
+	// This value, if non-zero, MUST BE equal to or greater than CPUs,
+	// and must be equal to Sockets * Cores * Threads if all are non-zero.
 	MaxCPUs uint32
 }
 
@@ -2773,6 +2774,36 @@ func (fwcfg FwCfg) QemuParams(config *Config) []string {
 	}
 
 	return qemuParams
+}
+
+// NUMANode describes a guest NUMA node and its mapping to host resources.
+type NUMANode struct {
+	// NodeID is the guest NUMA node identifier (0-based).
+	NodeID uint32
+
+	// CPUs is the guest vCPU range assigned to this node (e.g. "0-3").
+	CPUs string
+
+	// MemSize is the amount of memory for this node (e.g. "512M", "1G").
+	MemSize string
+
+	// HostNodes is the host NUMA node(s) this guest node maps to (e.g. "0" or "0-1").
+	HostNodes string
+
+	// MemBackendType selects the QEMU memory backend object type.
+	// Typical values: "memory-backend-ram" or "memory-backend-file".
+	MemBackendType string
+
+	// MemBackendPath is the mem-path for file-backed memory (hugepages, file-backed).
+	// Empty when using memory-backend-ram.
+	MemBackendPath string
+}
+
+// NUMADist describes a NUMA distance entry for `-numa dist`.
+type NUMADist struct {
+	Src uint32
+	Dst uint32
+	Val uint32
 }
 
 // Knobs regroups a set of qemu boolean settings
@@ -2921,6 +2952,14 @@ type Config struct {
 	FwCfg []FwCfg
 
 	IOThreads []IOThread
+
+	// NUMANodes defines multi-NUMA guest topology. When non-empty,
+	// appendMemoryKnobs creates per-node memory backends and -numa entries
+	// instead of a single flat memory region.
+	NUMANodes []NUMANode
+
+	// NUMADists defines inter-node distance entries emitted as -numa dist.
+	NUMADists []NUMADist
 
 	// PidFile is the -pidfile parameter
 	PidFile string
@@ -3096,6 +3135,13 @@ func (config *Config) appendCPUs() error {
 				return fmt.Errorf("MaxCPUs %d must be equal to or greater than CPUs %d",
 					config.SMP.MaxCPUs, config.SMP.CPUs)
 			}
+			if len(config.NUMANodes) > 1 && config.SMP.Sockets > 0 && config.SMP.Cores > 0 && config.SMP.Threads > 0 {
+				expected := config.SMP.Sockets * config.SMP.Cores * config.SMP.Threads
+				if config.SMP.MaxCPUs != expected {
+					return fmt.Errorf("MaxCPUs %d must equal Sockets(%d) * Cores(%d) * Threads(%d) = %d",
+						config.SMP.MaxCPUs, config.SMP.Sockets, config.SMP.Cores, config.SMP.Threads, expected)
+				}
+			}
 			SMPParams = append(SMPParams, fmt.Sprintf("maxcpus=%d", config.SMP.MaxCPUs))
 		}
 
@@ -3169,6 +3215,12 @@ func (config *Config) appendMemoryKnobs() {
 	if config.Memory.Size == "" {
 		return
 	}
+
+	if len(config.NUMANodes) > 0 && isDimmSupported(config) {
+		config.appendMultiNUMAMemoryKnobs()
+		return
+	}
+
 	var objMemParam, numaMemParam string
 	dimmName := "dimm1"
 	if config.Knobs.HugePages {
@@ -3197,6 +3249,49 @@ func (config *Config) appendMemoryKnobs() {
 	} else {
 		config.qemuParams = append(config.qemuParams, "-machine")
 		config.qemuParams = append(config.qemuParams, "memory-backend="+dimmName)
+	}
+}
+
+func (config *Config) appendMultiNUMAMemoryKnobs() {
+	for _, node := range config.NUMANodes {
+		memID := fmt.Sprintf("numa-mem%d", node.NodeID)
+
+		backendType := node.MemBackendType
+		if backendType == "" {
+			backendType = "memory-backend-ram"
+		}
+
+		objMemParam := fmt.Sprintf("%s,id=%s,size=%s", backendType, memID, node.MemSize)
+
+		if node.MemBackendPath != "" {
+			objMemParam += ",mem-path=" + node.MemBackendPath
+		}
+
+		if node.HostNodes != "" {
+			objMemParam += ",host-nodes=" + node.HostNodes + ",policy=bind"
+		}
+
+		if config.Knobs.MemShared {
+			objMemParam += ",share=on"
+		}
+		if config.Knobs.MemPrealloc {
+			objMemParam += ",prealloc=on"
+		}
+
+		config.qemuParams = append(config.qemuParams, "-object")
+		config.qemuParams = append(config.qemuParams, objMemParam)
+
+		numaParam := fmt.Sprintf("node,nodeid=%d,memdev=%s", node.NodeID, memID)
+		if node.CPUs != "" {
+			numaParam += ",cpus=" + node.CPUs
+		}
+		config.qemuParams = append(config.qemuParams, "-numa")
+		config.qemuParams = append(config.qemuParams, numaParam)
+	}
+
+	for _, dist := range config.NUMADists {
+		config.qemuParams = append(config.qemuParams, "-numa")
+		config.qemuParams = append(config.qemuParams, fmt.Sprintf("dist,src=%d,dst=%d,val=%d", dist.Src, dist.Dst, dist.Val))
 	}
 }
 
