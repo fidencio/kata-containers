@@ -45,6 +45,7 @@ import (
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/katautils/katatrace"
 	pkgUtils "github.com/kata-containers/kata-containers/src/runtime/pkg/utils"
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/uuid"
+	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/cpuset"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/utils"
 )
@@ -455,7 +456,71 @@ func (q *qemu) buildNUMATopology() ([]govmmQemu.NUMANode, []govmmQemu.NUMADist, 
 		})
 	}
 
+	q.validateVFIODeviceNUMAPlacement(numaNodes)
+
 	return nodes, dists, nil
+}
+
+// buildCoveredHostNodes maps each host NUMA node ID to its guest NUMA node
+// index based on the GuestNUMANode HostNodes configuration.
+func buildCoveredHostNodes(numaNodes []types.GuestNUMANode) map[int]uint32 {
+	covered := make(map[int]uint32)
+	for guestIdx, gn := range numaNodes {
+		nodeSet, err := cpuset.Parse(gn.HostNodes)
+		if err != nil {
+			continue
+		}
+		for _, n := range nodeSet.ToSlice() {
+			covered[n] = uint32(guestIdx)
+		}
+	}
+	return covered
+}
+
+// validateVFIODeviceNUMAPlacement checks that every cold-plugged VFIO device
+// (e.g. GPU) resides on a host NUMA node that is covered by the guest NUMA
+// topology. A mismatch means the device will incur cross-NUMA memory accesses.
+func (q *qemu) validateVFIODeviceNUMAPlacement(numaNodes []types.GuestNUMANode) {
+	coveredHostNodes := buildCoveredHostNodes(numaNodes)
+
+	for _, dev := range q.config.VFIODevices {
+		hostPath, err := config.GetHostPath(dev, false, "")
+		if err != nil {
+			q.Logger().WithError(err).WithField("device", dev.HostPath).Warn("Failed to resolve VFIO device host path for NUMA placement validation")
+			continue
+		}
+		dev.HostPath = hostPath
+		var vfioDevs []*config.VFIODev
+		if strings.HasPrefix(dev.HostPath, pkgDevice.IommufdDevPath) {
+			vfioDevs, err = drivers.GetDeviceFromVFIODev(dev)
+		} else {
+			vfioDevs, err = drivers.GetAllVFIODevicesFromIOMMUGroup(dev)
+		}
+		if err != nil {
+			q.Logger().WithError(err).WithField("device", dev.HostPath).Warn("Failed to enumerate VFIO device(s) for NUMA placement validation")
+			continue
+		}
+		for _, vd := range vfioDevs {
+			if vd.NUMANode < 0 {
+				continue
+			}
+			guestNode, ok := coveredHostNodes[vd.NUMANode]
+			if !ok {
+				q.Logger().WithFields(logrus.Fields{
+					"bdf":           vd.BDF,
+					"host-numa":     vd.NUMANode,
+					"guest-numa":    "none",
+					"covered-nodes": coveredHostNodes,
+				}).Warn("VFIO device on host NUMA node not covered by guest NUMA topology; cross-NUMA memory accesses may occur")
+			} else {
+				q.Logger().WithFields(logrus.Fields{
+					"bdf":        vd.BDF,
+					"host-numa":  vd.NUMANode,
+					"guest-numa": guestNode,
+				}).Debug("VFIO device NUMA placement validated")
+			}
+		}
+	}
 }
 
 func (q *qemu) qmpSocketPath(id string) (string, error) {
