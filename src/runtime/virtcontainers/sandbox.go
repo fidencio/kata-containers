@@ -2923,9 +2923,18 @@ func (s *Sandbox) fetchContainers(ctx context.Context) error {
 
 // checkVCPUsPinning is used to support CPUSet mode of kata container.
 // CPUSet mode is on when Sandbox.HypervisorConfig.EnableVCPUsPinning
-// is set to true. Then it fetches sandbox's number of vCPU threads
+// is set to true.
+//
+// In the non-NUMA path, it fetches the sandbox's number of vCPU threads
 // and number of CPUs in CPUSet. If the two are equal, each vCPU thread
-// is then pinned to one fixed CPU in CPUSet.
+// is pinned 1:1 to the CPUs in CPUSet.
+//
+// When NUMA topology is configured (GuestNUMANodes > 1), vCPU threads
+// are pinned to host CPUs belonging to the same NUMA node as the vCPU's
+// assigned guest NUMA node, preserving memory locality. In the NUMA path,
+// vCPUs are distributed proportionally across nodes and each vCPU is
+// pinned round-robin to the host CPUs within its NUMA node; the 1:1
+// count equality check does not apply.
 func (s *Sandbox) checkVCPUsPinning(ctx context.Context) error {
 	if s.config == nil {
 		return fmt.Errorf("no sandbox config found")
@@ -2934,7 +2943,6 @@ func (s *Sandbox) checkVCPUsPinning(ctx context.Context) error {
 		return nil
 	}
 
-	// fetch vCPU thread ids and CPUSet
 	vCPUThreadsMap, err := s.hypervisor.GetThreadIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get vCPU thread ids from hypervisor: %v", err)
@@ -2949,9 +2957,39 @@ func (s *Sandbox) checkVCPUsPinning(ctx context.Context) error {
 	}
 	cpuSetSlice := cpuSet.ToSlice()
 
-	// check if vCPU thread numbers and CPU numbers are equal
+	numaNodes := s.config.HypervisorConfig.GuestNUMANodes
+
+	if len(cpuSetSlice) == 0 {
+		if len(numaNodes) > 1 {
+			// No cpuset constraint (e.g. ctr without k8s). Build an effective
+			// cpuset from the NUMA nodes' HostCPUs so pinning works using the
+			// full host NUMA topology.
+			for _, gn := range numaNodes {
+				hostCPUs, err := cpuset.Parse(gn.HostCPUs)
+				if err != nil {
+					continue
+				}
+				cpuSet = cpuSet.Union(hostCPUs)
+			}
+			cpuSetSlice = cpuSet.ToSlice()
+			if len(cpuSetSlice) == 0 {
+				s.Logger().Warn("sandbox CPUSet is empty and cannot derive from NUMA HostCPUs; skipping vCPU pinning")
+				s.isVCPUsPinningOn = false
+				return nil
+			}
+			s.Logger().WithField("effective-cpuset", cpuSet.String()).Debug("derived cpuset from NUMA HostCPUs for pinning")
+		} else {
+			s.Logger().Warn("sandbox CPUSet is empty; skipping vCPU pinning")
+			s.isVCPUsPinningOn = false
+			return nil
+		}
+	}
+
+	if len(numaNodes) > 1 {
+		return s.checkVCPUsPinningNUMA(ctx, vCPUThreadsMap, numaNodes, cpuSetSlice)
+	}
+
 	numVCPUs, numCPUs := len(vCPUThreadsMap.vcpus), len(cpuSetSlice)
-	// if not equal, we should reset threads scheduling to random pattern
 	if numVCPUs != numCPUs {
 		if s.isVCPUsPinningOn {
 			s.isVCPUsPinningOn = false
@@ -2959,7 +2997,6 @@ func (s *Sandbox) checkVCPUsPinning(ctx context.Context) error {
 		}
 		return nil
 	}
-	// if equal, we can use vCPU thread pinning
 	for i, tid := range vCPUThreadsMap.vcpus {
 		if err := resCtrl.SetThreadAffinity(tid, cpuSetSlice[i:i+1]); err != nil {
 			if err := s.resetVCPUsPinning(ctx, vCPUThreadsMap, cpuSetSlice); err != nil {
@@ -2968,6 +3005,66 @@ func (s *Sandbox) checkVCPUsPinning(ctx context.Context) error {
 			return fmt.Errorf("failed to set vcpu thread %d affinity to cpu %d: %v", tid, cpuSetSlice[i], err)
 		}
 	}
+	s.isVCPUsPinningOn = true
+	return nil
+}
+
+// checkVCPUsPinningNUMA pins vCPU threads to host CPUs that belong to the
+// same NUMA node as the vCPU's guest NUMA node assignment. vCPUs are
+// distributed proportionally to the host CPU count per NUMA node
+// (matching buildNUMATopology).
+func (s *Sandbox) checkVCPUsPinningNUMA(ctx context.Context, vCPUThreadsMap VcpuThreadIDs, numaNodes []types.GuestNUMANode, cpuSetSlice []int) error {
+	numVCPUs := uint32(len(vCPUThreadsMap.vcpus))
+	numNodes := uint32(len(numaNodes))
+	if numVCPUs < numNodes {
+		return fmt.Errorf("number of vCPUs (%d) must be >= NUMA node count (%d) for NUMA pinning", numVCPUs, numNodes)
+	}
+
+	vcpusPerNode, err := utils.DistributeVCPUsProportionally(numaNodes, numVCPUs)
+	if err != nil {
+		return fmt.Errorf("failed to compute NUMA vCPU distribution for pinning: %v", err)
+	}
+
+	cpuSetAll := cpuset.NewCPUSet(cpuSetSlice...)
+
+	var cpuOffset uint32
+	for i, gn := range numaNodes {
+		hostCPUs, err := cpuset.Parse(gn.HostCPUs)
+		if err != nil {
+			return fmt.Errorf("failed to parse HostCPUs for NUMA node %d: %v", i, err)
+		}
+		allowedCPUs := hostCPUs.Intersection(cpuSetAll).ToSlice()
+		if len(allowedCPUs) == 0 {
+			s.Logger().WithFields(logrus.Fields{
+				"numa-node":    i,
+				"host-cpus":    gn.HostCPUs,
+				"sandbox-cpus": cpuSetSlice,
+			}).Warn("NUMA node HostCPUs do not intersect sandbox CPUSet; pinning vCPUs to full cpuset for this node")
+			allowedCPUs = cpuSetSlice
+		}
+
+		startVCPU := cpuOffset
+		endVCPU := startVCPU + vcpusPerNode[i]
+		cpuOffset = endVCPU
+
+		for vcpuIdx := startVCPU; vcpuIdx < endVCPU; vcpuIdx++ {
+			tid, ok := vCPUThreadsMap.vcpus[int(vcpuIdx)]
+			if !ok {
+				if err := s.resetVCPUsPinning(ctx, vCPUThreadsMap, cpuSetSlice); err != nil {
+					return err
+				}
+				return fmt.Errorf("missing vcpu thread id for vcpu index %d", vcpuIdx)
+			}
+			pinIdx := int(vcpuIdx-startVCPU) % len(allowedCPUs)
+			if err := resCtrl.SetThreadAffinity(tid, allowedCPUs[pinIdx:pinIdx+1]); err != nil {
+				if err := s.resetVCPUsPinning(ctx, vCPUThreadsMap, cpuSetSlice); err != nil {
+					return err
+				}
+				return fmt.Errorf("failed to set vcpu thread %d affinity to cpu %d (NUMA node %d): %v", tid, allowedCPUs[pinIdx], i, err)
+			}
+		}
+	}
+
 	s.isVCPUsPinningOn = true
 	return nil
 }
