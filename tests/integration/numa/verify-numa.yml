@@ -1,0 +1,1351 @@
+---
+# NUMA Verification Playbook for Kata Containers
+#
+# Exercises every step in docs/how-to/how-to-use-numa-with-kata.md.
+# Supports both multi-NUMA hosts (full verification) and single-NUMA
+# hosts (verifies the "harmless no-op" path where multi-NUMA topology
+# is skipped).  Run locally on the node itself:
+#
+#   ansible-playbook -i inventory.ini verify-numa.yml \
+#       -e gpu_runtime_class=kata-qemu-nvidia-gpu
+#
+# See README.md for the full variable reference.
+
+- name: Verify Kata Containers NUMA support
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  become: true
+  environment:
+    KUBECONFIG: "{{ kubeconfig | default('/etc/kubernetes/admin.conf') }}"
+
+  vars:
+    kata_deploy_image: "ghcr.io/kata-containers/kata-deploy-ci"
+    kata_deploy_tag: "12948-b56b2b8a8d1e830585c88d82d4084aca5cbf9795-amd64"
+    gpu_runtime_class: ""
+    numa_runtime_class: "kata-qemu-numa"
+    helm_release_name: "kata-deploy"
+    helm_namespace: "kata-system"
+    kubelet_config_path: "/var/lib/kubelet/config.yaml"
+    pod_cpu_limit: "80"
+    pod_memory_limit: "64Gi"
+    gpu_pod_cpu_limit: "4"
+    gpu_pod_memory_limit: "8Gi"
+    kata_deploy_chart_path: "{{ playbook_dir }}/../../../tools/packaging/kata-deploy/helm-chart/kata-deploy"
+    pod_wait_timeout: 300
+    daemonset_wait_timeout: 600
+    skip_gpu_test: false
+    cleanup_kata_deploy: false
+
+    # Internal bookkeeping
+    _phase_results: {}
+
+  pre_tasks:
+    - name: Validate gpu_runtime_class is set when GPU tests are enabled
+      ansible.builtin.assert:
+        that:
+          - skip_gpu_test | bool or (gpu_runtime_class | length > 0)
+        fail_msg: >-
+          gpu_runtime_class must be set when GPU tests are enabled.
+          Pass -e gpu_runtime_class=kata-qemu-nvidia-gpu (or -snp / -tdx),
+          or disable GPU tests with -e skip_gpu_test=true.
+
+  tasks:
+    # =================================================================
+    # Phase 1 – Host Inspection (doc Step 1)
+    # =================================================================
+    - name: "Phase 1 – Host NUMA inspection"
+      block:
+        - name: Run numactl --hardware
+          ansible.builtin.command: numactl --hardware
+          register: numactl_out
+          changed_when: false
+
+        - name: Show numactl output
+          ansible.builtin.debug:
+            var: numactl_out.stdout_lines
+
+        - name: Parse host NUMA node count
+          ansible.builtin.set_fact:
+            host_numa_nodes: >-
+              {{ numactl_out.stdout
+                 | regex_search('available:\s+(\d+)\s+nodes', '\1')
+                 | first | int }}
+
+        - name: Determine if host is multi-NUMA
+          ansible.builtin.set_fact:
+            is_multi_numa: "{{ host_numa_nodes | int >= 2 }}"
+
+        - name: Show NUMA mode
+          ansible.builtin.debug:
+            msg: >-
+              Host has {{ host_numa_nodes }} NUMA node(s).
+              {% if is_multi_numa | bool %}
+              Running full multi-NUMA verification.
+              {% else %}
+              Running single-NUMA verification (harmless no-op path).
+              {% endif %}
+
+        - name: Parse per-node CPU lists
+          ansible.builtin.set_fact:
+            host_node_cpus: >-
+              {{ numactl_out.stdout
+                 | regex_findall('node\s+(\d+)\s+cpus:\s+(.+)')
+              }}
+
+        - name: Show parsed host NUMA topology
+          ansible.builtin.debug:
+            msg: "NUMA nodes: {{ host_numa_nodes }}, per-node CPUs: {{ host_node_cpus }}"
+
+        - name: Parse host NUMA distances
+          ansible.builtin.shell: |
+            set -o pipefail
+            numactl --hardware | sed -n '/node distances/,$ p' | tail -n +2
+          args:
+            executable: /bin/bash
+          register: host_distances_out
+          changed_when: false
+
+        - name: Show host NUMA distances
+          ansible.builtin.debug:
+            var: host_distances_out.stdout_lines
+
+        # GPU discovery (conditional)
+        - name: Discover NVIDIA GPUs
+          when: not (skip_gpu_test | bool)
+          block:
+            - name: List NVIDIA PCI devices
+              ansible.builtin.shell: |
+                set -o pipefail
+                lspci -Dnn -d 10de: | head -5
+              args:
+                executable: /bin/bash
+              register: lspci_gpu_out
+              changed_when: false
+
+            - name: Show GPU PCI devices
+              ansible.builtin.debug:
+                var: lspci_gpu_out.stdout_lines
+
+            - name: Extract first GPU BDF
+              ansible.builtin.set_fact:
+                gpu_bdf: >-
+                  {{ lspci_gpu_out.stdout_lines[0]
+                     | regex_search('^([0-9a-fA-F:.]+)\s', '\1')
+                     | first }}
+
+            - name: Read GPU NUMA node
+              ansible.builtin.slurp:
+                src: "/sys/bus/pci/devices/{{ gpu_bdf }}/numa_node"
+              register: gpu_numa_raw
+
+            - name: Set GPU NUMA node fact
+              ansible.builtin.set_fact:
+                gpu_host_numa_node: "{{ (gpu_numa_raw.content | b64decode | trim) }}"
+
+            - name: Show GPU NUMA placement
+              ansible.builtin.debug:
+                msg: "GPU {{ gpu_bdf }} is on host NUMA node {{ gpu_host_numa_node }}"
+
+        - name: Record Phase 1 success
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase1_host_inspection': 'PASS'}) }}"
+
+      rescue:
+        - name: Record Phase 1 failure
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase1_host_inspection': 'FAIL'}) }}"
+        - name: Fail with context
+          ansible.builtin.fail:
+            msg: "Phase 1 (Host Inspection) failed. See errors above."
+
+    # =================================================================
+    # Phase 2 – Ensure cpuManagerPolicy is "none"
+    # =================================================================
+    # With cpuManagerPolicy: static, Burstable pods get a tiny shared
+    # cpuset (leftover CPUs). We need "none" so the pod inherits the
+    # full node cpuset and the guest NUMA topology matches the host.
+    - name: "Phase 2 – Ensure cpuManagerPolicy is none"
+      block:
+        - name: Read current kubelet config
+          ansible.builtin.slurp:
+            src: "{{ kubelet_config_path }}"
+          register: kubelet_cfg_raw
+
+        - name: Check current cpuManagerPolicy
+          ansible.builtin.set_fact:
+            current_cpu_policy: >-
+              {{ (kubelet_cfg_raw.content | b64decode)
+                 | regex_search('cpuManagerPolicy:\s*"?(\w+)"?', '\1')
+                 | default(['none'], true) | first }}
+
+        - name: Show current cpuManagerPolicy
+          ansible.builtin.debug:
+            msg: "Current cpuManagerPolicy: {{ current_cpu_policy }}"
+
+        - name: Switch cpuManagerPolicy to none
+          when: current_cpu_policy != 'none'
+          block:
+            - name: Patch kubelet config – set cpuManagerPolicy to none
+              ansible.builtin.lineinfile:
+                path: "{{ kubelet_config_path }}"
+                regexp: '^cpuManagerPolicy:.*'
+                line: 'cpuManagerPolicy: "none"'
+                create: false
+
+            - name: Remove stale cpu_manager_state
+              ansible.builtin.file:
+                path: /var/lib/kubelet/cpu_manager_state
+                state: absent
+
+            - name: Restart kubelet
+              ansible.builtin.systemd:
+                name: kubelet
+                state: restarted
+                daemon_reload: true
+
+            - name: Wait for node to become Ready
+              ansible.builtin.shell: |
+                set -o pipefail
+                for i in $(seq 1 60); do
+                  STATUS=$(kubectl get nodes -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}')
+                  if [ "$STATUS" = "True" ]; then
+                    echo "ready"
+                    exit 0
+                  fi
+                  sleep 5
+                done
+                echo "timeout"
+                exit 1
+              args:
+                executable: /bin/bash
+              register: node_ready
+              changed_when: false
+
+        - name: Record Phase 2 success
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase2_cpu_manager': 'PASS'}) }}"
+
+      rescue:
+        - name: Record Phase 2 failure
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase2_cpu_manager': 'FAIL'}) }}"
+        - name: Fail with context
+          ansible.builtin.fail:
+            msg: "Phase 2 (cpuManagerPolicy) failed. See errors above."
+
+    # =================================================================
+    # Phase 3 – Deploy kata-deploy via Helm (doc Step 3)
+    # =================================================================
+    - name: "Phase 3 – Deploy kata-deploy with NUMA drop-in"
+      block:
+        - name: Create Helm namespace
+          ansible.builtin.command: kubectl create namespace {{ helm_namespace }}
+          register: ns_create
+          changed_when: ns_create.rc == 0
+          failed_when: ns_create.rc != 0 and 'already exists' not in ns_create.stderr
+
+        - name: Template Helm values file
+          ansible.builtin.template:
+            src: templates/kata-deploy-numa-values.yaml.j2
+            dest: /tmp/kata-deploy-numa-values.yaml
+            mode: "0644"
+
+        - name: Show rendered Helm values
+          ansible.builtin.command: cat /tmp/kata-deploy-numa-values.yaml
+          register: helm_values_show
+          changed_when: false
+
+        - name: Display Helm values
+          ansible.builtin.debug:
+            var: helm_values_show.stdout_lines
+
+        - name: Install / upgrade kata-deploy via Helm
+          ansible.builtin.command: >-
+            helm upgrade --install {{ helm_release_name }}
+            {{ kata_deploy_chart_path }}
+            --namespace {{ helm_namespace }}
+            -f /tmp/kata-deploy-numa-values.yaml
+            --set debug=true
+            --wait
+            --timeout {{ daemonset_wait_timeout }}s
+          register: helm_install
+          changed_when: true
+
+        - name: Show Helm output
+          ansible.builtin.debug:
+            var: helm_install.stdout_lines
+
+        - name: Wait for kata-deploy DaemonSet rollout
+          ansible.builtin.command: >-
+            kubectl rollout status daemonset/{{ helm_release_name }}
+            --namespace {{ helm_namespace }}
+            --timeout={{ daemonset_wait_timeout }}s
+          register: ds_rollout
+          changed_when: false
+
+        - name: Verify RuntimeClass for GPU exists
+          ansible.builtin.command: kubectl get runtimeclass {{ gpu_runtime_class }}
+          register: rc_gpu
+          changed_when: false
+          when: not (skip_gpu_test | bool)
+
+        - name: Verify NUMA is enabled in configuration
+          ansible.builtin.shell: |
+            set -o pipefail
+            grep -rE "enable_numa" \
+              /opt/kata/share/defaults/kata-containers/runtimes/qemu-numa/config.d/ 2>/dev/null || \
+            grep -rE "enable_numa" \
+              /opt/kata/share/defaults/kata-containers/runtimes/*/config.d/ 2>/dev/null || \
+            grep -rE "enable_numa\s*=\s*true" \
+              /opt/kata/share/defaults/kata-containers/configuration-qemu-nvidia-gpu*.toml 2>/dev/null || true
+          args:
+            executable: /bin/bash
+          register: dropin_verify
+          changed_when: false
+
+        - name: Show NUMA config verification
+          ansible.builtin.debug:
+            var: dropin_verify.stdout_lines
+
+        - name: Assert NUMA is enabled
+          ansible.builtin.assert:
+            that:
+              - "'enable_numa' in dropin_verify.stdout"
+            fail_msg: >-
+              NUMA not enabled in any config. Check that the kata-deploy image
+              includes enable_numa=true in nvidia-gpu configs or that a NUMA
+              drop-in is deployed (doc Step 3.3).
+
+        - name: Record Phase 3 success
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase3_helm_deploy': 'PASS'}) }}"
+
+      rescue:
+        - name: Record Phase 3 failure
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase3_helm_deploy': 'FAIL'}) }}"
+        - name: Fail with context
+          ansible.builtin.fail:
+            msg: "Phase 3 (Helm deploy) failed. See errors above."
+
+    # =================================================================
+    # Phase 4 – Deploy basic NUMA test pod (doc Step 4.1 + Step 5)
+    # =================================================================
+    - name: "Phase 4 – Basic NUMA test pod and guest verification"
+      block:
+        - name: Template NUMA test pod manifest
+          ansible.builtin.template:
+            src: templates/numa-test-pod.yaml.j2
+            dest: /tmp/numa-test-pod.yaml
+            mode: "0644"
+
+        - name: Read rendered NUMA test pod manifest
+          ansible.builtin.slurp:
+            src: /tmp/numa-test-pod.yaml
+          register: numa_pod_manifest
+
+        - name: Delete stale numa-test pod (if any)
+          ansible.builtin.command: kubectl delete pod numa-test --ignore-not-found --wait=true
+          changed_when: true
+
+        - name: Apply NUMA test pod
+          ansible.builtin.command: kubectl apply -f /tmp/numa-test-pod.yaml
+          changed_when: true
+
+        - name: Wait for numa-test pod to be Running
+          ansible.builtin.shell: |
+            set -o pipefail
+            for i in $(seq 1 {{ (pod_wait_timeout | int / 5) | int }}); do
+              PHASE=$(kubectl get pod numa-test -o jsonpath='{.status.phase}' 2>/dev/null)
+              if [ "$PHASE" = "Running" ]; then
+                echo "running"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "timeout: last phase=$PHASE"
+            exit 1
+          args:
+            executable: /bin/bash
+          register: pod_wait
+          changed_when: false
+
+        - name: Install numactl inside the guest
+          ansible.builtin.command: >-
+            kubectl exec numa-test --
+            bash -c "apt-get update -qq && apt-get install -y -qq numactl > /dev/null 2>&1"
+          register: numactl_install
+          changed_when: true
+
+        # --- Guest NUMA verification (doc Step 5) ---
+
+        - name: "Guest: numactl --hardware"
+          ansible.builtin.command: kubectl exec numa-test -- numactl --hardware
+          register: guest_numactl
+          changed_when: false
+
+        - name: Show guest numactl output
+          ansible.builtin.debug:
+            var: guest_numactl.stdout_lines
+
+        - name: Parse guest NUMA node count
+          ansible.builtin.set_fact:
+            guest_numa_nodes: >-
+              {{ guest_numactl.stdout
+                 | regex_search('available:\s+(\d+)\s+nodes', '\1')
+                 | first | int }}
+
+        # --- Multi-NUMA guest assertions ---
+        - name: "Multi-NUMA: assert guest has multiple NUMA nodes"
+          ansible.builtin.assert:
+            that:
+              - guest_numa_nodes | int >= 2
+            fail_msg: >-
+              Guest has only {{ guest_numa_nodes }} NUMA node(s) –
+              expected >= 2 (matching host). Check doc Step 5.1.
+          when: is_multi_numa | bool
+
+        - name: "Multi-NUMA: assert guest NUMA node count matches host"
+          ansible.builtin.assert:
+            that:
+              - guest_numa_nodes | int == host_numa_nodes | int
+            fail_msg: >-
+              Guest NUMA nodes ({{ guest_numa_nodes }}) !=
+              host NUMA nodes ({{ host_numa_nodes }}). Check numa_mapping.
+          when: is_multi_numa | bool
+
+        # --- Single-NUMA guest assertions ---
+        - name: "Single-NUMA: assert guest has exactly 1 NUMA node"
+          ansible.builtin.assert:
+            that:
+              - guest_numa_nodes | int == 1
+            fail_msg: >-
+              Guest has {{ guest_numa_nodes }} NUMA node(s) on a
+              single-NUMA host – expected 1 (no-op path).
+          when: not (is_multi_numa | bool)
+
+        - name: "Guest: lscpu NUMA info"
+          ansible.builtin.shell: |
+            set -o pipefail
+            kubectl exec numa-test -- lscpu | grep -i numa
+          args:
+            executable: /bin/bash
+          register: guest_lscpu_numa
+          changed_when: false
+
+        - name: Show guest lscpu NUMA
+          ansible.builtin.debug:
+            var: guest_lscpu_numa.stdout_lines
+
+        - name: "Guest: per-node cpulist"
+          ansible.builtin.command: >-
+            kubectl exec numa-test --
+            bash -c "cat /sys/devices/system/node/node*/cpulist"
+          register: guest_cpulists
+          changed_when: false
+
+        - name: Show guest per-node CPU lists
+          ansible.builtin.debug:
+            var: guest_cpulists.stdout_lines
+
+        - name: "Multi-NUMA: assert CPUs are distributed across nodes"
+          ansible.builtin.assert:
+            that:
+              - guest_cpulists.stdout_lines | length >= 2
+            fail_msg: >-
+              All CPUs appear to be on a single NUMA node. Check doc Step 5.2.
+          when: is_multi_numa | bool
+
+        - name: "Multi-NUMA: count guest vCPUs per NUMA node"
+          ansible.builtin.shell: |
+            set -o pipefail
+            kubectl exec numa-test -- bash -c '
+              for node in /sys/devices/system/node/node*/cpulist; do
+                n=$(basename $(dirname $node))
+                cpus=$(cat $node)
+                # Count CPUs in the range list (e.g. "0-39" = 40, "0-39,80" = 41)
+                count=0
+                for range in $(echo $cpus | tr "," " "); do
+                  if echo "$range" | grep -q "-"; then
+                    lo=$(echo $range | cut -d- -f1)
+                    hi=$(echo $range | cut -d- -f2)
+                    count=$((count + hi - lo + 1))
+                  else
+                    count=$((count + 1))
+                  fi
+                done
+                echo "${n}: ${count}"
+              done
+            '
+          args:
+            executable: /bin/bash
+          register: guest_cpus_per_node
+          changed_when: false
+          when: is_multi_numa | bool
+
+        - name: Show guest vCPUs per NUMA node
+          ansible.builtin.debug:
+            var: guest_cpus_per_node.stdout_lines
+          when: is_multi_numa | bool
+
+        - name: "Multi-NUMA: assert guest vCPU distribution is balanced"
+          ansible.builtin.assert:
+            that:
+              - guest_cpus_per_node.stdout_lines | length >= 2
+              - (guest_cpus_per_node.stdout_lines | map('regex_replace', '.*:\\s*', '') | map('int') | max) -
+                (guest_cpus_per_node.stdout_lines | map('regex_replace', '.*:\\s*', '') | map('int') | min) <= 1
+            fail_msg: >-
+              Guest vCPU distribution is not balanced across NUMA nodes.
+              Per-node counts: {{ guest_cpus_per_node.stdout_lines }}
+              Expected difference of at most 1 between nodes.
+          when: is_multi_numa | bool
+
+        - name: "Single-NUMA: assert all CPUs on node 0"
+          ansible.builtin.assert:
+            that:
+              - guest_cpulists.stdout_lines | length == 1
+            fail_msg: >-
+              CPUs are split across multiple nodes on a single-NUMA host.
+          when: not (is_multi_numa | bool)
+
+        - name: "Guest: per-node meminfo"
+          ansible.builtin.shell: |
+            set -o pipefail
+            kubectl exec numa-test -- \
+              bash -c "cat /sys/devices/system/node/node*/meminfo | grep MemTotal"
+          args:
+            executable: /bin/bash
+          register: guest_meminfo
+          changed_when: false
+
+        - name: Show guest per-node memory
+          ansible.builtin.debug:
+            var: guest_meminfo.stdout_lines
+
+        - name: "Multi-NUMA: assert memory is split across nodes"
+          ansible.builtin.assert:
+            that:
+              - guest_meminfo.stdout_lines | length >= 2
+            fail_msg: >-
+              Memory is not split across NUMA nodes. Check doc Step 5.3.
+          when: is_multi_numa | bool
+
+        - name: "Single-NUMA: assert all memory on node 0"
+          ansible.builtin.assert:
+            that:
+              - guest_meminfo.stdout_lines | length == 1
+            fail_msg: >-
+              Memory is split across nodes on a single-NUMA host.
+          when: not (is_multi_numa | bool)
+
+        - name: Record Phase 4 success
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase4_basic_pod': 'PASS'}) }}"
+
+      rescue:
+        - name: Record Phase 4 failure
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase4_basic_pod': 'FAIL'}) }}"
+        - name: Fail with context
+          ansible.builtin.fail:
+            msg: "Phase 4 (basic NUMA pod / guest verification) failed. See errors above."
+
+    # =================================================================
+    # Phase 5 – Host-side NUMA verification (doc Step 6)
+    # =================================================================
+    - name: "Phase 5 – Host-side NUMA verification"
+      block:
+        - name: Get sandbox ID for numa-test
+          ansible.builtin.shell: |
+            set -o pipefail
+            crictl pods --name numa-test -q | head -1
+          args:
+            executable: /bin/bash
+          register: sandbox_id_out
+          changed_when: false
+
+        - name: Set sandbox ID fact
+          ansible.builtin.set_fact:
+            sandbox_id: "{{ sandbox_id_out.stdout | trim }}"
+
+        - name: Find QEMU PID for numa-test
+          ansible.builtin.shell: |
+            set -o pipefail
+            pgrep -f "qemu.*{{ sandbox_id }}" | head -1
+          args:
+            executable: /bin/bash
+          register: qemu_pid_out
+          changed_when: false
+
+        - name: Set QEMU PID fact
+          ansible.builtin.set_fact:
+            qemu_pid: "{{ qemu_pid_out.stdout | trim }}"
+
+        - name: Show QEMU PID
+          ansible.builtin.debug:
+            msg: "QEMU PID for numa-test: {{ qemu_pid }}"
+
+        # vCPU thread affinity check
+        - name: List QEMU thread IDs and their affinities
+          ansible.builtin.shell: |
+            set -o pipefail
+            ls /proc/{{ qemu_pid }}/task/ | while read tid; do
+              LIST=$(taskset -pc "$tid" 2>/dev/null | sed 's/.*: //')
+              if [[ "$LIST" =~ ^[0-9]+$ ]]; then
+                NODE=$(ls -d /sys/devices/system/cpu/cpu${LIST}/node* 2>/dev/null | grep -oP 'node\K[0-9]+' | head -1)
+                echo "TID ${tid}: cpu ${LIST} (NUMA NODE ${NODE:-?})"
+              else
+                echo "TID ${tid}: cpus ${LIST}"
+              fi
+            done
+          args:
+            executable: /bin/bash
+          register: vcpu_affinity
+          changed_when: false
+
+        - name: Show vCPU thread affinities
+          ansible.builtin.debug:
+            var: vcpu_affinity.stdout_lines
+
+        - name: "Multi-NUMA: count pinned vCPUs per NUMA node"
+          ansible.builtin.shell: |
+            set -o pipefail
+            declare -A node_count
+            for tid in $(ls /proc/{{ qemu_pid }}/task/); do
+              LIST=$(taskset -pc "$tid" 2>/dev/null | sed 's/.*: //')
+              # vCPU threads are pinned to exactly one CPU (no dash, no comma)
+              if [[ "$LIST" =~ ^[0-9]+$ ]]; then
+                # Map CPU to NUMA node via sysfs topology link
+                NODE=$(ls -d /sys/devices/system/cpu/cpu${LIST}/node* 2>/dev/null | grep -oP 'node\K[0-9]+' | head -1)
+                [[ -z "$NODE" ]] && NODE="unknown"
+                node_count[$NODE]=$(( ${node_count[$NODE]:-0} + 1 ))
+              fi
+            done
+            for node in $(echo "${!node_count[@]}" | tr ' ' '\n' | sort -n); do
+              echo "node${node}: ${node_count[$node]}"
+            done
+          args:
+            executable: /bin/bash
+          register: pinning_balance
+          changed_when: false
+          when: is_multi_numa | bool
+
+        - name: Show pinning balance per NUMA node
+          ansible.builtin.debug:
+            var: pinning_balance.stdout_lines
+          when: is_multi_numa | bool
+
+        - name: "Multi-NUMA: assert vCPU pinning is balanced across nodes"
+          ansible.builtin.assert:
+            that:
+              - pinning_balance.stdout_lines | length >= 2
+              - (pinning_balance.stdout_lines | map('regex_replace', '.*:\\s*', '') | map('int') | max) -
+                (pinning_balance.stdout_lines | map('regex_replace', '.*:\\s*', '') | map('int') | min) <= 1
+            fail_msg: >-
+              vCPU pinning is not balanced across NUMA nodes.
+              Per-node counts: {{ pinning_balance.stdout_lines }}
+              Expected difference of at most 1 between nodes.
+          when: is_multi_numa | bool
+
+        # Check shim NUMA logs
+        - name: Check shim logs for NUMA messages
+          ansible.builtin.shell: |
+            set -o pipefail
+            journalctl -t kata --no-pager -n 500 | grep "{{ sandbox_id }}" | grep -i numa || true
+          args:
+            executable: /bin/bash
+          register: shim_numa_logs
+          changed_when: false
+
+        - name: Show shim NUMA log lines
+          ansible.builtin.debug:
+            var: shim_numa_logs.stdout_lines
+
+        # QEMU command-line verification
+        - name: Read QEMU command line (NUMA-related args)
+          ansible.builtin.shell: |
+            set -o pipefail
+            cat /proc/{{ qemu_pid }}/cmdline | tr '\0' ' '
+          args:
+            executable: /bin/bash
+          register: qemu_cmdline
+          changed_when: false
+
+        - name: Show QEMU NUMA command-line arguments
+          ansible.builtin.debug:
+            var: qemu_cmdline.stdout_lines
+
+        # --- Multi-NUMA QEMU assertions ---
+        - name: "Multi-NUMA: assert QEMU uses policy=bind"
+          ansible.builtin.assert:
+            that:
+              - "'policy=bind' in qemu_cmdline.stdout"
+            fail_msg: >-
+              QEMU command line does not contain 'policy=bind'.
+              NUMA memory binding is not active. Check doc Step 6.3.
+          when: is_multi_numa | bool
+
+        - name: "Multi-NUMA: assert QEMU has host-nodes arguments"
+          ansible.builtin.assert:
+            that:
+              - "'host-nodes=' in qemu_cmdline.stdout"
+            fail_msg: >-
+              QEMU command line does not contain 'host-nodes='.
+              Guest NUMA nodes are not bound to host nodes. Check doc Step 6.3.
+          when: is_multi_numa | bool
+
+        - name: "Multi-NUMA: assert QEMU has -numa dist entries"
+          ansible.builtin.assert:
+            that:
+              - "'dist,src=' in qemu_cmdline.stdout"
+            fail_msg: >-
+              QEMU command line does not contain NUMA distance entries.
+              Check doc Step 6.3.
+          when: is_multi_numa | bool
+
+        # --- Single-NUMA QEMU assertions ---
+        - name: "Single-NUMA: assert QEMU has NO -numa topology"
+          ansible.builtin.assert:
+            that:
+              - "'policy=bind' not in qemu_cmdline.stdout"
+              - "'node,nodeid=' not in qemu_cmdline.stdout"
+            fail_msg: >-
+              QEMU command line contains NUMA topology on a single-NUMA
+              host. The runtime should have skipped multi-NUMA setup.
+          when: not (is_multi_numa | bool)
+
+        - name: "Single-NUMA: confirm NUMA was skipped in shim logs"
+          ansible.builtin.debug:
+            msg: >-
+              Single-NUMA host: QEMU has no -numa arguments (expected).
+              The runtime correctly skipped multi-NUMA topology.
+          when: not (is_multi_numa | bool)
+
+        - name: Record Phase 5 success
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase5_host_verify': 'PASS'}) }}"
+
+      rescue:
+        - name: Record Phase 5 failure
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase5_host_verify': 'FAIL'}) }}"
+        - name: Fail with context
+          ansible.builtin.fail:
+            msg: "Phase 5 (host-side NUMA verification) failed. See errors above."
+
+    # =================================================================
+    # Phase 6 – GPU NUMA test pod (doc Steps 4.2 + 7, conditional)
+    # =================================================================
+    - name: "Phase 6 – GPU NUMA verification"
+      when: not (skip_gpu_test | bool)
+      block:
+        - name: Template GPU test pod manifest
+          ansible.builtin.template:
+            src: templates/gpu-numa-test-pod.yaml.j2
+            dest: /tmp/gpu-numa-test-pod.yaml
+            mode: "0644"
+
+        - name: Read rendered GPU test pod manifest
+          ansible.builtin.slurp:
+            src: /tmp/gpu-numa-test-pod.yaml
+          register: gpu_pod_manifest
+
+        - name: Delete stale gpu-numa-test pod (if any)
+          ansible.builtin.command: kubectl delete pod gpu-numa-test --ignore-not-found --wait=true
+          changed_when: true
+
+        - name: Apply GPU NUMA test pod
+          ansible.builtin.command: kubectl apply -f /tmp/gpu-numa-test-pod.yaml
+          changed_when: true
+
+        - name: Wait for gpu-numa-test pod to be Running
+          ansible.builtin.shell: |
+            set -o pipefail
+            for i in $(seq 1 {{ (pod_wait_timeout | int / 5) | int }}); do
+              PHASE=$(kubectl get pod gpu-numa-test -o jsonpath='{.status.phase}' 2>/dev/null)
+              if [ "$PHASE" = "Running" ]; then
+                echo "running"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "timeout: last phase=$PHASE"
+            exit 1
+          args:
+            executable: /bin/bash
+          register: gpu_pod_wait
+          changed_when: false
+
+        - name: Get sandbox ID for gpu-numa-test
+          ansible.builtin.shell: |
+            set -o pipefail
+            crictl pods --name gpu-numa-test -q | head -1
+          args:
+            executable: /bin/bash
+          register: gpu_sandbox_id_out
+          changed_when: false
+
+        - name: Set GPU sandbox ID fact
+          ansible.builtin.set_fact:
+            gpu_sandbox_id: "{{ gpu_sandbox_id_out.stdout | trim }}"
+
+        - name: Find QEMU PID for gpu-numa-test
+          ansible.builtin.shell: |
+            set -o pipefail
+            pgrep -f "qemu.*{{ gpu_sandbox_id }}" | head -1
+          args:
+            executable: /bin/bash
+          register: gpu_qemu_pid_out
+          changed_when: false
+
+        - name: Set GPU QEMU PID fact
+          ansible.builtin.set_fact:
+            gpu_qemu_pid: "{{ gpu_qemu_pid_out.stdout | trim }}"
+
+        - name: Show GPU QEMU PID
+          ansible.builtin.debug:
+            msg: "QEMU PID for gpu-numa-test: {{ gpu_qemu_pid }}"
+
+        # --- Host-side GPU vCPU pinning verification ---
+        - name: "GPU Host: list vCPU thread affinities"
+          ansible.builtin.shell: |
+            set -o pipefail
+            ls /proc/{{ gpu_qemu_pid }}/task/ | while read tid; do
+              LIST=$(taskset -pc "$tid" 2>/dev/null | sed 's/.*: //')
+              if [[ "$LIST" =~ ^[0-9]+$ ]]; then
+                NODE=$(ls -d /sys/devices/system/cpu/cpu${LIST}/node* 2>/dev/null | grep -oP 'node\K[0-9]+' | head -1)
+                echo "TID ${tid}: cpu ${LIST} (NUMA NODE ${NODE:-?})"
+              else
+                echo "TID ${tid}: cpus ${LIST}"
+              fi
+            done
+          args:
+            executable: /bin/bash
+          register: gpu_vcpu_affinity
+          changed_when: false
+
+        - name: Show GPU vCPU thread affinities
+          ansible.builtin.debug:
+            var: gpu_vcpu_affinity.stdout_lines
+
+        - name: "GPU Host: count pinned vCPUs per NUMA node"
+          ansible.builtin.shell: |
+            set -o pipefail
+            declare -A node_count
+            for tid in $(ls /proc/{{ gpu_qemu_pid }}/task/); do
+              LIST=$(taskset -pc "$tid" 2>/dev/null | sed 's/.*: //')
+              if [[ "$LIST" =~ ^[0-9]+$ ]]; then
+                NODE=$(ls -d /sys/devices/system/cpu/cpu${LIST}/node* 2>/dev/null | grep -oP 'node\K[0-9]+' | head -1)
+                [[ -z "$NODE" ]] && NODE="unknown"
+                node_count[$NODE]=$(( ${node_count[$NODE]:-0} + 1 ))
+              fi
+            done
+            for node in $(echo "${!node_count[@]}" | tr ' ' '\n' | sort -n); do
+              echo "node${node}: ${node_count[$node]}"
+            done
+          args:
+            executable: /bin/bash
+          register: gpu_pinning_balance
+          changed_when: false
+          when: is_multi_numa | bool
+
+        - name: Show GPU pinning balance per NUMA node
+          ansible.builtin.debug:
+            var: gpu_pinning_balance.stdout_lines
+          when: is_multi_numa | bool
+
+        - name: "Multi-NUMA: assert GPU pod vCPU pinning is balanced"
+          ansible.builtin.assert:
+            that:
+              - gpu_pinning_balance.stdout_lines | length >= 2
+              - (gpu_pinning_balance.stdout_lines | map('regex_replace', '.*:\\s*', '') | map('int') | max) -
+                (gpu_pinning_balance.stdout_lines | map('regex_replace', '.*:\\s*', '') | map('int') | min) <= 1
+            fail_msg: >-
+              GPU pod vCPU pinning is not balanced across NUMA nodes.
+              Per-node counts: {{ gpu_pinning_balance.stdout_lines }}
+              Expected difference of at most 1 between nodes.
+          when: is_multi_numa | bool
+
+        - name: Verify host-side GPU NUMA node
+          ansible.builtin.slurp:
+            src: "/sys/bus/pci/devices/{{ gpu_bdf }}/numa_node"
+          register: gpu_numa_verify
+
+        - name: Show GPU host NUMA node
+          ansible.builtin.debug:
+            msg: "GPU {{ gpu_bdf }} is on host NUMA node {{ gpu_numa_verify.content | b64decode | trim }}"
+
+        - name: Check shim logs for VFIO NUMA placement
+          ansible.builtin.shell: |
+            set -o pipefail
+            journalctl -t kata --no-pager -n 500 \
+              | grep "{{ gpu_sandbox_id }}" \
+              | grep -i "VFIO device NUMA" || true
+          args:
+            executable: /bin/bash
+          register: vfio_numa_log
+          changed_when: false
+
+        - name: Show VFIO NUMA placement log
+          ansible.builtin.debug:
+            var: vfio_numa_log.stdout_lines
+
+        - name: "Multi-NUMA: check VFIO placement was validated"
+          ansible.builtin.debug:
+            msg: >-
+              {{ 'VFIO NUMA placement log found'
+                 if ('VFIO device NUMA' in vfio_numa_log.stdout)
+                 else 'VFIO NUMA placement log not found (may require newer image with debug logging)' }}
+          when: is_multi_numa | bool
+
+        - name: "Single-NUMA: VFIO placement check not applicable"
+          ansible.builtin.debug:
+            msg: >-
+              Single-NUMA host: VFIO NUMA placement validation is not
+              applicable (multi-NUMA topology was skipped). GPU passthrough
+              still works; all devices are on node 0.
+          when: not (is_multi_numa | bool)
+
+        - name: "GPU Guest: NUMA node online"
+          ansible.builtin.command: >-
+            kubectl exec gpu-numa-test --
+            cat /sys/devices/system/node/online
+          register: gpu_guest_numa_online
+          changed_when: false
+
+        - name: "GPU Guest: per-node cpulist"
+          ansible.builtin.command: >-
+            kubectl exec gpu-numa-test --
+            bash -c "for n in /sys/devices/system/node/node*/cpulist; do echo $n: $(cat $n); done"
+          register: gpu_guest_cpulists
+          changed_when: false
+
+        - name: "GPU Guest: per-node meminfo"
+          ansible.builtin.shell: |
+            set -o pipefail
+            kubectl exec gpu-numa-test -- \
+              bash -c "cat /sys/devices/system/node/node*/meminfo | grep MemTotal"
+          args:
+            executable: /bin/bash
+          register: gpu_guest_meminfo
+          changed_when: false
+
+        - name: "GPU Guest: nvidia-smi (basic)"
+          ansible.builtin.command: >-
+            kubectl exec gpu-numa-test --
+            nvidia-smi --query-gpu=index,name,pci.bus_id,memory.total --format=csv,noheader
+          register: gpu_guest_nvidia_smi
+          changed_when: false
+          failed_when: false
+
+        - name: "GPU Guest: nvidia-smi topo --matrix (best effort)"
+          ansible.builtin.command: >-
+            kubectl exec gpu-numa-test --
+            nvidia-smi topo --matrix
+          register: nvidia_topo
+          changed_when: false
+          failed_when: false
+
+        - name: Show nvidia-smi topology
+          ansible.builtin.debug:
+            var: nvidia_topo.stdout_lines
+          when: nvidia_topo.rc == 0
+
+        - name: "GPU Guest: query GPU NUMA affinity"
+          ansible.builtin.command: >-
+            kubectl exec gpu-numa-test --
+            nvidia-smi --query-gpu=index,gpu_bus_id,pci.domain --format=csv,noheader
+          register: gpu_guest_pci_info
+          changed_when: false
+          failed_when: false
+
+        - name: "GPU Guest: read GPU NUMA node via sysfs"
+          ansible.builtin.shell: |
+            set -o pipefail
+            kubectl exec gpu-numa-test -- bash -c '
+              for dev in /sys/bus/pci/devices/*/numa_node; do
+                class=$(cat "$(dirname $dev)/class" 2>/dev/null)
+                # 0x030000 = VGA compatible controller (GPU), 0x030200 = 3D controller
+                if [[ "$class" == "0x030000" || "$class" == "0x030200" || "$class" == "0x302000" ]]; then
+                  bdf=$(basename $(dirname $dev))
+                  node=$(cat $dev)
+                  echo "$bdf: NUMA node $node"
+                fi
+              done
+            '
+          args:
+            executable: /bin/bash
+          register: gpu_guest_numa_node
+          changed_when: false
+          failed_when: false
+
+        - name: Show GPU guest NUMA affinity
+          ansible.builtin.debug:
+            var: gpu_guest_numa_node.stdout_lines
+          when: gpu_guest_numa_node.rc == 0
+
+        # Read QEMU command line for GPU pod
+        - name: "GPU Host: read QEMU command line"
+          ansible.builtin.shell: |
+            set -o pipefail
+            cat /proc/{{ gpu_qemu_pid }}/cmdline | tr '\0' ' '
+          args:
+            executable: /bin/bash
+          register: gpu_qemu_cmdline
+          changed_when: false
+
+        - name: "Multi-NUMA: assert GPU QEMU uses VFIO device"
+          ansible.builtin.assert:
+            that:
+              - "'vfio-pci' in gpu_qemu_cmdline.stdout"
+            fail_msg: >-
+              GPU pod QEMU command line does not contain 'vfio-pci'.
+              GPU passthrough may not be configured correctly.
+          when: is_multi_numa | bool
+
+        - name: "Multi-NUMA: assert GPU QEMU has NUMA topology"
+          ansible.builtin.assert:
+            that:
+              - "'policy=bind' in gpu_qemu_cmdline.stdout"
+              - "'host-nodes=' in gpu_qemu_cmdline.stdout"
+            fail_msg: >-
+              GPU pod QEMU command line does not contain NUMA binding arguments.
+              Expected 'policy=bind' and 'host-nodes=' for multi-NUMA GPU pinning.
+          when: is_multi_numa | bool
+
+        - name: Record Phase 6 success
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase6_gpu_verify': 'PASS'}) }}"
+
+      rescue:
+        - name: Record Phase 6 failure
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase6_gpu_verify': 'FAIL'}) }}"
+        - name: Fail with context
+          ansible.builtin.fail:
+            msg: "Phase 6 (GPU NUMA verification) failed. See errors above."
+
+    # =================================================================
+    # Phase 7 – Cleanup
+    # =================================================================
+    - name: "Phase 7 – Cleanup"
+      block:
+        - name: Delete numa-test pod
+          ansible.builtin.command: kubectl delete pod numa-test --ignore-not-found --wait=true
+          changed_when: true
+
+        - name: Delete gpu-numa-test pod
+          ansible.builtin.command: kubectl delete pod gpu-numa-test --ignore-not-found --wait=true
+          changed_when: true
+          when: not (skip_gpu_test | bool)
+
+        - name: Uninstall kata-deploy Helm release
+          ansible.builtin.command: >-
+            helm uninstall {{ helm_release_name }}
+            --namespace {{ helm_namespace }}
+            --wait --timeout {{ daemonset_wait_timeout }}s
+          when: cleanup_kata_deploy | bool
+          changed_when: true
+
+        - name: Remove temporary files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/kata-deploy-numa-values.yaml
+            - /tmp/numa-test-pod.yaml
+            - /tmp/gpu-numa-test-pod.yaml
+
+        - name: Record Phase 7 success
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase7_cleanup': 'PASS'}) }}"
+
+      rescue:
+        - name: Record Phase 7 failure
+          ansible.builtin.set_fact:
+            _phase_results: "{{ _phase_results | combine({'phase7_cleanup': 'FAIL'}) }}"
+
+  post_tasks:
+    - name: Generate NUMA verification report
+      ansible.builtin.copy:
+        dest: "{{ report_path | default('~/numa-results.md') }}"
+        mode: "0644"
+        content: |
+          # Kata Containers NUMA Verification Report
+
+          | Field | Value |
+          |-------|-------|
+          | Date | {{ ansible_date_time.iso8601 }} |
+          | Hostname | {{ ansible_hostname }} |
+          | Kernel | {{ ansible_kernel }} |
+          | NUMA mode | {% if is_multi_numa | bool %}Multi-NUMA ({{ host_numa_nodes }} nodes){% else %}Single-NUMA (no-op path){% endif %} |
+          | kata-deploy image | `{{ kata_deploy_image }}:{{ kata_deploy_tag }}` |
+          | Runtime class | `{{ gpu_runtime_class }}` |
+
+          ## Phase Results
+
+          | Phase | Result |
+          |-------|--------|
+          {% for phase, result in _phase_results.items() | sort %}
+          | {{ phase | replace('_', ' ') | title }} | {{ '**PASS**' if result == 'PASS' else '**FAIL**' }} |
+          {% endfor %}
+
+          ---
+
+          ## Phase 1: Host Inspection
+
+          **NUMA nodes detected:** {{ host_numa_nodes }}
+
+          **Per-node CPUs:**
+
+          | Node | CPUs |
+          |------|------|
+          {% for pair in host_node_cpus %}
+          | {{ pair[0] }} | `{{ pair[1] | trim }}` |
+          {% endfor %}
+
+          **NUMA distances:**
+
+          ```
+          {% for line in host_distances_out.stdout_lines %}
+          {{ line }}
+          {% endfor %}
+          ```
+          {% if gpu_bdf is defined %}
+
+          **GPU:** `{{ gpu_bdf }}` on NUMA node {{ gpu_host_numa_node }}
+          {% endif %}
+
+          ## Phase 2: cpuManagerPolicy
+
+          - **cpuManagerPolicy:** `none` (ensured by playbook)
+
+          ## Phase 3: kata-deploy Helm Deployment
+
+          **NUMA config files:**
+
+          ```
+          {% for line in dropin_verify.stdout_lines %}
+          {{ line }}
+          {% endfor %}
+          ```
+
+          ## Phase 4: Guest NUMA Topology
+
+          - **Pod:** `numa-test`
+          - **RuntimeClass:** `{{ gpu_runtime_class }}`
+          - **Resources:** {{ pod_cpu_limit }} vCPUs, {{ pod_memory_limit }} memory
+
+          <details>
+          <summary>Pod manifest (click to expand)</summary>
+
+          ```yaml
+          {{ numa_pod_manifest.content | b64decode }}
+          ```
+
+          </details>
+          {% if guest_numactl is defined %}
+
+          **Guest `numactl --hardware`:**
+
+          ```
+          {% for line in guest_numactl.stdout_lines %}
+          {{ line }}
+          {% endfor %}
+          ```
+          {% endif %}
+
+          **Guest NUMA nodes:** {{ guest_numa_nodes | default('N/A') }}
+          {% if is_multi_numa | bool %}
+
+          **Guest vCPU distribution:**
+
+          | Node | CPUs |
+          |------|------|
+          {% for line in guest_cpulists.stdout_lines | default([]) %}
+          | {{ loop.index0 }} | `{{ line }}` |
+          {% endfor %}
+          {% if guest_cpus_per_node is defined %}
+
+          **Guest vCPUs per node:** {{ guest_cpus_per_node.stdout_lines | default([]) | join(', ') }}
+          {% endif %}
+
+          **Guest memory per node:**
+
+          ```
+          {% for line in guest_meminfo.stdout_lines | default([]) %}
+          {{ line | trim }}
+          {% endfor %}
+          ```
+          {% else %}
+
+          Single-NUMA: all vCPUs and memory on node 0 (expected).
+          {% endif %}
+          {% if guest_lscpu_numa is defined %}
+
+          **Guest `lscpu` NUMA info:**
+
+          ```
+          {% for line in guest_lscpu_numa.stdout_lines %}
+          {{ line }}
+          {% endfor %}
+          ```
+          {% endif %}
+
+          ## Phase 5: Host-side QEMU Verification
+
+          - **QEMU PID:** {{ qemu_pid | default('N/A') }}
+          {% if is_multi_numa | bool %}
+
+          | QEMU Arg | Status |
+          |----------|--------|
+          | `-numa node` | {{ '**PRESENT**' if ('node,nodeid=' in qemu_cmdline.stdout | default('')) else 'MISSING' }} |
+          | `policy=bind` | {{ '**PRESENT**' if ('policy=bind' in qemu_cmdline.stdout | default('')) else 'MISSING' }} |
+          | `host-nodes=` | {{ '**PRESENT**' if ('host-nodes=' in qemu_cmdline.stdout | default('')) else 'MISSING' }} |
+          | `-numa dist` | {{ '**PRESENT**' if ('dist,src=' in qemu_cmdline.stdout | default('')) else 'MISSING' }} |
+          {% else %}
+
+          Single-NUMA: no QEMU `-numa` args (expected).
+          {% endif %}
+          {% if pinning_balance is defined and pinning_balance.stdout_lines | default([]) | length > 0 %}
+
+          **vCPU pinning balance:**
+
+          | Node | Pinned vCPUs |
+          |------|--------------|
+          {% for line in pinning_balance.stdout_lines %}
+          | {{ line.split(':')[0] | trim }} | {{ line.split(':')[1] | trim }} |
+          {% endfor %}
+          {% endif %}
+
+          <details>
+          <summary>vCPU thread affinities (click to expand)</summary>
+
+          ```
+          {% for line in vcpu_affinity.stdout_lines | default([]) %}
+          {{ line }}
+          {% endfor %}
+          ```
+
+          </details>
+          {% if shim_numa_logs is defined and shim_numa_logs.stdout_lines | default([]) | length > 0 %}
+
+          **Shim NUMA log lines:**
+
+          ```
+          {% for line in shim_numa_logs.stdout_lines %}
+          {{ line[-120:] }}
+          {% endfor %}
+          ```
+          {% endif %}
+          {% if not (skip_gpu_test | bool) %}
+
+          ## Phase 6: GPU NUMA Verification
+
+          - **Pod:** `gpu-numa-test`
+          - **RuntimeClass:** `{{ gpu_runtime_class }}`
+          - **Resources:** {{ gpu_pod_cpu_limit }} vCPUs, {{ gpu_pod_memory_limit }} memory
+          - **GPU BDF:** `{{ gpu_bdf | default('N/A') }}`
+          - **GPU host NUMA node:** {{ gpu_host_numa_node | default('N/A') }}
+          - **QEMU PID:** {{ gpu_qemu_pid | default('N/A') }}
+          - **VFIO NUMA log:** {{ 'found' if (vfio_numa_log is defined and 'VFIO device NUMA' in vfio_numa_log.stdout | default('')) else 'not found (debug-level, non-critical)' }}
+
+          <details>
+          <summary>Pod manifest (click to expand)</summary>
+
+          ```yaml
+          {{ gpu_pod_manifest.content | b64decode }}
+          ```
+
+          </details>
+
+          ### Host Side
+          {% if gpu_pinning_balance is defined and gpu_pinning_balance.stdout_lines | default([]) | length > 0 %}
+
+          **vCPU pinning balance:**
+
+          | Node | Pinned vCPUs |
+          |------|--------------|
+          {% for line in gpu_pinning_balance.stdout_lines %}
+          | {{ line.split(':')[0] | trim }} | {{ line.split(':')[1] | trim }} |
+          {% endfor %}
+          {% endif %}
+
+          | QEMU Arg | Status |
+          |----------|--------|
+          | `vfio-pci` | {{ '**PRESENT**' if ('vfio-pci' in gpu_qemu_cmdline.stdout | default('')) else 'MISSING' }} |
+          | `policy=bind` | {{ '**PRESENT**' if ('policy=bind' in gpu_qemu_cmdline.stdout | default('')) else 'MISSING' }} |
+          | `host-nodes=` | {{ '**PRESENT**' if ('host-nodes=' in gpu_qemu_cmdline.stdout | default('')) else 'MISSING' }} |
+
+          <details>
+          <summary>vCPU thread affinities (click to expand)</summary>
+
+          ```
+          {% for line in gpu_vcpu_affinity.stdout_lines | default([]) %}
+          {{ line }}
+          {% endfor %}
+          ```
+
+          </details>
+
+          ### Guest Side
+
+          **Guest NUMA nodes online:** {{ gpu_guest_numa_online.stdout | default('N/A') | trim }}
+
+          **Guest vCPU distribution:**
+
+          ```
+          {% for line in gpu_guest_cpulists.stdout_lines | default([]) %}
+          {{ line }}
+          {% endfor %}
+          ```
+
+          **Guest memory per node:**
+
+          ```
+          {% for line in gpu_guest_meminfo.stdout_lines | default([]) %}
+          {{ line | trim }}
+          {% endfor %}
+          ```
+          {% if gpu_guest_numa_node is defined and gpu_guest_numa_node.rc == 0 and gpu_guest_numa_node.stdout | length > 0 %}
+
+          **GPU NUMA affinity inside guest:**
+
+          ```
+          {% for line in gpu_guest_numa_node.stdout_lines %}
+          {{ line }}
+          {% endfor %}
+          ```
+          {% endif %}
+          {% if gpu_guest_nvidia_smi is defined and gpu_guest_nvidia_smi.rc == 0 %}
+
+          **nvidia-smi GPUs:**
+
+          ```
+          {% for line in gpu_guest_nvidia_smi.stdout_lines %}
+          {{ line }}
+          {% endfor %}
+          ```
+          {% endif %}
+          {% if nvidia_topo is defined and nvidia_topo.rc == 0 %}
+
+          **nvidia-smi topology:**
+
+          ```
+          {% for line in nvidia_topo.stdout_lines %}
+          {{ line }}
+          {% endfor %}
+          ```
+          {% endif %}
+          {% endif %}
+
+          ---
+
+          {% set pass_count = _phase_results.values() | select('equalto', 'PASS') | list | length %}
+          {% set total_count = _phase_results | length %}
+          ## Result: {{ pass_count }}/{{ total_count }} phases passed {% if pass_count == total_count %}✓ ALL PASSED{% else %}✗ SOME FAILED{% endif %}
+
+    - name: Show report path
+      ansible.builtin.debug:
+        msg: "Report saved to {{ report_path | default('~/numa-results.md') }}"
