@@ -20,6 +20,7 @@ materialx
 # Hardware & Architecture
 AMD
 APQN
+chiplet
 cpuid
 DCAP
 DGPU
