@@ -574,10 +574,6 @@ create_erofs_rootfs_image() {
 		die "Invalid block size for erofs"
 	fi
 
-	if ! device="$(setup_loop_device "${image}")"; then
-		die "Could not setup loop device"
-	fi
-
 	local mount_dir
 	mount_dir=$(mktemp -p "${TMPDIR:-/tmp}" -d osbuilder-mount-dir.XXXX)
 
@@ -594,18 +590,32 @@ create_erofs_rootfs_image() {
 	setup_systemd "${mount_dir}"
 
 	local -r fsimage="$(mktemp)"
-	mkfs.erofs -Enoinline_data "${fsimage}" "${mount_dir}"
+	mkfs.erofs -zlz4hc -Enoinline_data "${fsimage}" "${mount_dir}"
 	local -r img_size="$(stat -c"%s" "${fsimage}")"
-	local -r img_size_mb="$(((("${img_size}" + 1048576) / 1048576) + 1 + "${rootfs_start}"))"
+	local img_size_mb="$(((("${img_size}" + 1048576) / 1048576) + 1 + "${rootfs_start}"))"
+
+	if [[ "${MEASURED_ROOTFS}" == "yes" ]]; then
+		# create_disk places the hash partition at 99% of the disk,
+		# so p1 only gets 99% of img_size_mb. Scale up so the erofs
+		# data still fits: img_size_mb / 0.99 ≈ img_size_mb * 100 / 99 + 1
+		img_size_mb=$(( (img_size_mb * 100 / 99) + 1 ))
+	fi
 
 	create_disk "${image}" "${img_size_mb}" "ext4" "${rootfs_start}"
 
+	if ! device="$(setup_loop_device "${image}")"; then
+		die "Could not setup loop device"
+	fi
+
 	dd if="${fsimage}" of="${device}p1"
+	rm -f "${fsimage}"
+
+	setup_verity "${device}" "${image}"
 
 	losetup -d "${device}"
 	rm -rf "${mount_dir}"
 
-	return "${img_size_mb}"
+	erofs_img_size_mb="${img_size_mb}"
 }
 
 set_dax_header() {
@@ -620,7 +630,13 @@ set_dax_header() {
 	local dax_image="${image}.dax"
 	rm -f "${dax_image}" "${header_image}"
 
-	create_disk "${header_image}" "${img_size}" "${fs_type}" "${rootfs_offset}"
+	# parted doesn't recognize erofs as a partition type, use ext4 as the
+	# partition label -- it's just metadata and doesn't affect the contents.
+	local parted_fs_type="${fs_type}"
+	if [[ "${fs_type}" == "erofs" ]]; then
+		parted_fs_type="ext4"
+	fi
+	create_disk "${header_image}" "${img_size}" "${parted_fs_type}" "${rootfs_offset}"
 
 	dax_header_bytes=$((dax_header_sz * 1024 * 1024))
 	dax_alignment_bytes=$((dax_alignment * 1024 * 1024))
@@ -701,7 +717,7 @@ main() {
 		# rather than some device, so no need to guess the device dest size first.
 		create_erofs_rootfs_image "${rootfs}" "${image}" \
 						"${block_size}" "${agent_bin}"
-		rootfs_img_size=$?
+		rootfs_img_size="${erofs_img_size_mb}"
 		img_size=$((rootfs_img_size + dax_header_sz))
 	else
 		img_size=$(calculate_img_size "${rootfs}" "${root_free_space}" \
