@@ -444,6 +444,8 @@ endif
     DEFVFIOMODE_NV := guest-kernel
     DEFKUBELETROOTDIR := /var/lib/kubelet
     DEFPODRESOURCEAPISOCK_NV := "$(DEFKUBELETROOTDIR)/pod-resources/kubelet.sock"
+    # NVIDIA profile: rootfs filesystem type (erofs for read-only, compressed images)
+    DEFROOTFSTYPE_NV := $(ROOTFSTYPE_EROFS)
     # NVIDIA profile: rootfs block driver (avoid virtio-pmem/DAX for this stack)
     VMROOTFSDRIVER_NV := virtio-blk-pci
     # Agent client: hybrid vsock retry delay (ms); vsock path uses this as initial backoff (clamped in agent)
@@ -746,6 +748,7 @@ USER_VARS += DEFSTATICRESOURCEMGMT_NV
 USER_VARS += DEFVFIOMODE_NV
 USER_VARS += DEFKUBELETROOTDIR
 USER_VARS += DEFPODRESOURCEAPISOCK_NV
+USER_VARS += DEFROOTFSTYPE_NV
 USER_VARS += VMROOTFSDRIVER_NV
 USER_VARS += DEFDIALTIMEOUTMS_NV
 USER_VARS += DEFRECONNECTTIMEOUTMS_NV

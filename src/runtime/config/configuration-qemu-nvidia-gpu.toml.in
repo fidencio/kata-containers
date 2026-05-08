@@ -18,10 +18,10 @@ image = "@IMAGEPATH_NV@"
 machine_type = "@MACHINETYPE@"
 
 # rootfs filesystem type:
-#   - ext4 (default)
+#   - ext4
 #   - xfs
-#   - erofs
-rootfs_type = @DEFROOTFSTYPE@
+#   - erofs (default for NVIDIA)
+rootfs_type = @DEFROOTFSTYPE_NV@
 
 # Enable running QEMU VMM as a non-root user.
 # By default QEMU VMM run as root. When this is set to true, QEMU VMM process runs as

@@ -660,6 +660,7 @@ install_initrd_confidential() {
 install_image_nvidia_gpu() {
 	export AGENT_POLICY
 	export MEASURED_ROOTFS="yes"
+	export FS_TYPE="erofs"
 	local version
 	version=$(get_latest_nvidia_driver_version)
 	EXTRA_PKGS="apt curl ${EXTRA_PKGS}"
@@ -672,6 +673,7 @@ install_image_nvidia_gpu_confidential() {
 	export CONFIDENTIAL_GUEST="yes"
 	export AGENT_POLICY
 	export MEASURED_ROOTFS="yes"
+	export FS_TYPE="erofs"
 	local version
 	version=$(get_latest_nvidia_driver_version)
 	EXTRA_PKGS="apt curl ${EXTRA_PKGS}"

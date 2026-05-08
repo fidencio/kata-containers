@@ -61,10 +61,10 @@ snp_id_auth = ""
 snp_guest_policy = 196608
 
 # rootfs filesystem type:
-#   - ext4 (default)
+#   - ext4
 #   - xfs
-#   - erofs
-rootfs_type = @DEFROOTFSTYPE@
+#   - erofs (default for NVIDIA)
+rootfs_type = @DEFROOTFSTYPE_NV@
 
 # Block storage driver to be used for the VM rootfs is backed
 # by a block device. This is virtio-blk-pci, virtio-blk-mmio or nvdimm
