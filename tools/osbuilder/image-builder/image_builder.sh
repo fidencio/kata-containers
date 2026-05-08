@@ -453,6 +453,67 @@ setup_systemd() {
 		touch "${mount_dir}/etc/machine-id"
 }
 
+# Parse veritysetup output and format as kernel parameters.
+# $1: veritysetup format output text
+# $2: image path (for error messages)
+build_kernel_verity_params() {
+	local -r output="$1"
+	local -r image="$2"
+	local root_hash
+	local salt
+	local data_blocks
+	local data_block_size
+	local hash_block_size
+
+	read_verity_field() {
+		local -r label="$1"
+		local value
+
+		value=$(printf '%s\n' "${output}" | sed -n "s/^${label}:[[:space:]]*//p")
+		value="${value// \[*/}"
+		[[ -n "${value}" ]] || die "Missing '${label}' in verity output for ${image}"
+
+		echo "${value}"
+	}
+
+	root_hash=$(read_verity_field "Root hash")
+	salt=$(read_verity_field "Salt")
+	data_blocks=$(read_verity_field "Data blocks")
+	data_block_size=$(read_verity_field "Data block size")
+	hash_block_size=$(read_verity_field "Hash block size")
+
+	printf 'root_hash=%s,salt=%s,data_blocks=%s,data_block_size=%s,hash_block_size=%s' \
+		"${root_hash}" \
+		"${salt}" \
+		"${data_blocks}" \
+		"${data_block_size}" \
+		"${hash_block_size}"
+}
+
+# Run veritysetup on an image's rootfs (p1) and hash (p2) partitions,
+# then write the resulting verity parameters to a file.
+# $1: loop device (e.g. /dev/loop0)
+# $2: image path
+setup_verity() {
+	local -r device="$1"
+	local -r image="$2"
+
+	if [[ "${MEASURED_ROOTFS}" != "yes" ]] || [[ ! -b "${device}p2" ]]; then
+		return 0
+	fi
+
+	info "veritysetup format rootfs device: ${device}p1, hash device: ${device}p2"
+	local -r image_dir=$(dirname "${image}")
+	local verity_output
+	verity_output=$(veritysetup format --no-superblock "${device}p1" "${device}p2" 2>&1)
+
+	local kernel_verity_params
+	kernel_verity_params="$(build_kernel_verity_params "${verity_output}" "${image}")"
+
+	printf '%s\n' "${kernel_verity_params}" > "${image_dir}"/root_hash_"${BUILD_VARIANT}".txt
+	OK "Root hash file created for variant: ${BUILD_VARIANT}"
+}
+
 create_rootfs_image() {
 	local rootfs="$1"
 	local image="$2"
@@ -497,50 +558,7 @@ create_rootfs_image() {
 		fsck.ext4 -D -y "${device}p1"
 	fi
 
-	if [[ "${MEASURED_ROOTFS}" == "yes" ]] && [[ -b "${device}p2" ]]; then
-		info "veritysetup format rootfs device: ${device}p1, hash device: ${device}p2"
-		local -r image_dir=$(dirname "${image}")
-		local verity_output
-		verity_output=$(veritysetup format --no-superblock "${device}p1" "${device}p2" 2>&1)
-		build_kernel_verity_params() {
-			local -r output="$1"
-			local root_hash
-			local salt
-			local data_blocks
-			local data_block_size
-			local hash_block_size
-
-			read_verity_field() {
-				local -r label="$1"
-				local value
-
-				value=$(printf '%s\n' "${output}" | sed -n "s/^${label}:[[:space:]]*//p")
-				value="${value// \[*/}"
-				[[ -n "${value}" ]] || die "Missing '${label}' in verity output for ${image}"
-
-				echo "${value}"
-			}
-
-			root_hash=$(read_verity_field "Root hash")
-			salt=$(read_verity_field "Salt")
-			data_blocks=$(read_verity_field "Data blocks")
-			data_block_size=$(read_verity_field "Data block size")
-			hash_block_size=$(read_verity_field "Hash block size")
-
-			printf 'root_hash=%s,salt=%s,data_blocks=%s,data_block_size=%s,hash_block_size=%s' \
-				"${root_hash}" \
-				"${salt}" \
-				"${data_blocks}" \
-				"${data_block_size}" \
-				"${hash_block_size}"
-		}
-
-		local kernel_verity_params
-		kernel_verity_params="$(build_kernel_verity_params "${verity_output}")"
-
-		printf '%s\n' "${kernel_verity_params}" > "${image_dir}"/root_hash_"${BUILD_VARIANT}".txt
-		OK "Root hash file created for variant: ${BUILD_VARIANT}"
-	fi
+	setup_verity "${device}" "${image}"
 
 	losetup -d "${device}"
 	rm -rf "${mount_dir}"
