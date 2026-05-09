@@ -79,6 +79,9 @@ Extra environment variables:
 	BLOCK_SIZE:     Use to specify the size of blocks in bytes. DEFAULT: 4096
 	IMAGE_REGISTRY: Hostname for the image registry used to pull down the rootfs build image.
 	NSDAX_BIN:      Use to specify path to pre-compiled 'nsdax' tool.
+	SKIP_DAX_HEADER: If set to "yes", skip the DAX/NVDIMM header. Use for
+	                virtio-blk-pci images that never use NVDIMM.
+	                DEFAULT: "no"
 	USE_DOCKER:     If set will build image in a Docker Container (requries docker)
 	                DEFAULT: not set
 	USE_PODMAN:     If set and USE_DOCKER not set, will build image in a Podman Container (requries podman)
@@ -163,7 +166,7 @@ build_with_container() {
 	#Make sure we use a compatible runtime to build rootfs
 	# In case Clear Containers Runtime is installed we dont want to hit issue:
 	#https://github.com/clearcontainers/runtime/issues/828
-	# shellcheck disable=SC2086
+	# shellcheck disable=SC2086,SC2154
 	"${container_engine}" run  \
 		   --rm \
 		   --runtime "${DOCKER_RUNTIME}"  \
@@ -174,6 +177,7 @@ build_with_container() {
 		   --env BLOCK_SIZE="${block_size}" \
 		   --env ROOT_FREE_SPACE="${root_free_space}" \
 		   --env NSDAX_BIN="${nsdax_bin}" \
+		   --env SKIP_DAX_HEADER="${SKIP_DAX_HEADER}" \
 		   --env MEASURED_ROOTFS="${MEASURED_ROOTFS}" \
 		   --env SELINUX="${SELINUX}" \
 		   --env DEBUG="${DEBUG}" \
@@ -316,8 +320,11 @@ calculate_img_size() {
 	local fs_type="$3"
 	local block_size="$4"
 
-	# rootfs start + DAX header size + rootfs end
-	local reserved_size_mb=$((rootfs_start + dax_header_sz + rootfs_end))
+	local dax_overhead=0
+	if [[ "${SKIP_DAX_HEADER:-no}" != "yes" ]]; then
+		dax_overhead="${dax_header_sz}"
+	fi
+	local reserved_size_mb=$((rootfs_start + dax_overhead + rootfs_end))
 
 	disk_size="$(calculate_required_disk_size "${rootfs}" "${fs_type}" "${block_size}")"
 
@@ -712,25 +719,34 @@ main() {
 		die "Invalid rootfs"
 	fi
 
+	local skip_dax="${SKIP_DAX_HEADER:-no}"
+	local dax_overhead=0
+	if [[ "${skip_dax}" != "yes" ]]; then
+		dax_overhead="${dax_header_sz}"
+	fi
+
 	if [[ "${fs_type}" == 'erofs' ]]; then
 		# mkfs.erofs accepts an src root dir directory as an input
 		# rather than some device, so no need to guess the device dest size first.
 		create_erofs_rootfs_image "${rootfs}" "${image}" \
 						"${block_size}" "${agent_bin}"
 		rootfs_img_size="${erofs_img_size_mb}"
-		img_size=$((rootfs_img_size + dax_header_sz))
+		img_size=$((rootfs_img_size + dax_overhead))
 	else
 		img_size=$(calculate_img_size "${rootfs}" "${root_free_space}" \
 			"${fs_type}" "${block_size}")
 
 		# the first 2M are for the first MBR + NVDIMM metadata and were already
-		# consider in calculate_img_size
-		rootfs_img_size=$((img_size - dax_header_sz))
+		# considered in calculate_img_size
+		rootfs_img_size=$((img_size - dax_overhead))
 		create_rootfs_image "${rootfs}" "${image}" "${rootfs_img_size}" \
 						"${fs_type}" "${block_size}" "${agent_bin}"
 	fi
-	# insert at the beginning of the image the MBR + DAX header
-	set_dax_header "${image}" "${img_size}" "${fs_type}" "${nsdax_bin}"
+
+	if [[ "${skip_dax}" != "yes" ]]; then
+		# insert at the beginning of the image the MBR + DAX header
+		set_dax_header "${image}" "${img_size}" "${fs_type}" "${nsdax_bin}"
+	fi
 
 	# shellcheck disable=SC2154
 	chown "${USER}:${GROUP}" "${image}"
