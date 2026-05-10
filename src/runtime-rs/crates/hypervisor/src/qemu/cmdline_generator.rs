@@ -209,6 +209,15 @@ impl Kernel {
             if config.disable_guest_selinux { 0 } else { 1 }
         )));
 
+        for extra in &config.extra_images {
+            if !extra.verity_params.is_empty() {
+                kernel_params.append(&mut KernelParams::from_string(&format!(
+                    "kata.addon.{}.verity_params={}",
+                    extra.name, extra.verity_params
+                )));
+            }
+        }
+
         Ok(Kernel {
             path: config.boot_info.kernel.clone(),
             initrd_path: config.boot_info.initrd.clone(),
@@ -1048,6 +1057,7 @@ struct DeviceVirtioBlk {
     config_wce: bool,
     share_rw: bool,
     devno: Option<String>,
+    serial_override: Option<String>,
 }
 
 impl DeviceVirtioBlk {
@@ -1058,6 +1068,7 @@ impl DeviceVirtioBlk {
             config_wce: false,
             share_rw: true,
             devno,
+            serial_override: None,
         }
     }
 
@@ -1070,6 +1081,11 @@ impl DeviceVirtioBlk {
     #[allow(dead_code)]
     fn set_share_rw(&mut self, share_rw: bool) -> &mut Self {
         self.share_rw = share_rw;
+        self
+    }
+
+    fn set_serial_override(&mut self, serial: String) -> &mut Self {
+        self.serial_override = Some(serial);
         self
     }
 }
@@ -1090,7 +1106,11 @@ impl ToQemuParams for DeviceVirtioBlk {
         } else {
             params.push("share-rw=off".to_owned());
         }
-        params.push(format!("serial=image-{}", self.id));
+        let serial = match &self.serial_override {
+            Some(s) => s.clone(),
+            None => format!("image-{}", self.id),
+        };
+        params.push(format!("serial={serial}"));
         if let Some(devno) = &self.devno {
             params.push(format!("devno={devno}"));
         }
@@ -2784,6 +2804,7 @@ impl<'a> QemuCmdLine<'a> {
         path: &str,
         is_direct: bool,
         is_scsi: bool,
+        serial_override: Option<&str>,
     ) -> Result<()> {
         self.devices
             .push(Box::new(BlockBackend::new(device_id, path, is_direct)));
@@ -2792,8 +2813,11 @@ impl<'a> QemuCmdLine<'a> {
             self.devices
                 .push(Box::new(DeviceScsiHd::new(device_id, "scsi0.0", devno)));
         } else {
-            self.devices
-                .push(Box::new(DeviceVirtioBlk::new(device_id, bus_type(), devno)));
+            let mut dev = DeviceVirtioBlk::new(device_id, bus_type(), devno);
+            if let Some(serial) = serial_override {
+                dev.set_serial_override(serial.to_string());
+            }
+            self.devices.push(Box::new(dev));
         }
 
         Ok(())
