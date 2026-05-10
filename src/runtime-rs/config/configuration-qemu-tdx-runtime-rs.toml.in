@@ -15,10 +15,15 @@
 [hypervisor.qemu]
 path = "@QEMUPATH@"
 kernel = "@KERNELPATH_COCO@"
-image = "@IMAGECONFIDENTIALPATH@"
+image = "@IMAGEPATH@"
 # initrd = "@INITRDPATH@"
 machine_type = "@MACHINETYPE@"
 tdx_quote_generation_service_socket_port = @QEMUTDXQUOTEGENERATIONSERVICESOCKETPORT@
+
+[[hypervisor.qemu.extra_images]]
+name = "coco"
+path = "@COCOIMAGEPATH@"
+verity_params = "@COCOVERITYPARAMS@"
 
 # rootfs filesystem type:
 #   - ext4 (default)

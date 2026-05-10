@@ -15,8 +15,13 @@
 [hypervisor.qemu]
 path = "@QEMUPATH@"
 kernel = "@KERNELPATH_COCO@"
-image = "@IMAGECONFIDENTIALPATH@"
+image = "@IMAGEPATH@"
 machine_type = "@MACHINETYPE@"
+
+[[hypervisor.qemu.extra_images]]
+name = "coco"
+path = "@COCOIMAGEPATH@"
+verity_params = "@COCOVERITYPARAMS@"
 
 # rootfs filesystem type:
 #   - ext4 (default)
