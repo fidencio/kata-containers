@@ -1276,11 +1276,11 @@ func TestKataAgentCreateContainerVFIODevices(t *testing.T) {
 			expectVFIODev: true,
 		},
 		{
-			name:          "VFIO device with cold plug enabled but guest kernel mode",
+			name:          "VFIO device with cold plug enabled and guest kernel mode",
 			hotPlugVFIO:   config.NoPort,
 			coldPlugVFIO:  config.BridgePort,
 			vfioMode:      config.VFIOModeGuestKernel,
-			expectVFIODev: false,
+			expectVFIODev: true,
 		},
 	}
 

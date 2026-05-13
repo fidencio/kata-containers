@@ -1096,6 +1096,8 @@ func (c *Container) createDevices(ctx context.Context, contConfig *ContainerConf
 		// Device is already cold-plugged at sandbox creation time
 		// ignore it for the container creation
 		if coldPlugVFIO && isVFIODevice {
+			deviceInfos[i].ColdPlug = true
+			deviceInfos[i].Port = c.sandbox.config.HypervisorConfig.ColdPlugVFIO
 			vfioColdPlugDevices = append(vfioColdPlugDevices, deviceInfos[i])
 			continue
 		}
@@ -1114,6 +1116,14 @@ func (c *Container) createDevices(ctx context.Context, contConfig *ContainerConf
 		sortedVFIODevices := sortContainerVFIODevices(vfioColdPlugDevices)
 		// Combine sorted VFIO devices with hot-plug devices
 		deviceInfos = append(sortedVFIODevices, hotPlugDevices...)
+	} else if coldPlugVFIO && c.sandbox.config.VfioMode == config.VFIOModeGuestKernel {
+		// In guest-kernel mode cold-plugged VFIO devices must still be
+		// registered with the device manager so they appear in c.devices
+		// and get sent to the agent in the CreateContainerRequest.
+		// Without this the agent never builds a container-id → guest-PCI
+		// address mapping and update_env_pci fails with "No PCI mapping
+		// found for container".
+		deviceInfos = append(vfioColdPlugDevices, hotPlugDevices...)
 	} else {
 		deviceInfos = sortContainerVFIODevices(hotPlugDevices)
 	}
