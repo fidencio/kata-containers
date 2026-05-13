@@ -2003,6 +2003,9 @@ func (vfioDev VFIODevice) QemuParams(config *Config) []string {
 	}
 
 	deviceParams = append(deviceParams, fmt.Sprintf("%s,host=%s", driver, vfioDev.BDF))
+	if vfioDev.ID != "" {
+		deviceParams = append(deviceParams, fmt.Sprintf("id=%s", vfioDev.ID))
+	}
 	if vfioDev.Transport.isVirtioPCI(config) {
 		if vfioDev.VendorID != "" {
 			deviceParams = append(deviceParams, fmt.Sprintf("x-pci-vendor-id=%s", vfioDev.VendorID))
