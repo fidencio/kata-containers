@@ -775,14 +775,22 @@ func newSandbox(ctx context.Context, sandboxConfig SandboxConfig, factory Factor
 	}
 
 	if !coldPlugVFIO {
+		s.Logger().Error("coldPlugVFIO is false, skipping cold-plug device loop")
 		return s, nil
 	}
 
-	for _, dev := range sandboxConfig.HypervisorConfig.VFIODevices {
-		s.Logger().Info("cold-plug device: ", dev)
+	s.Logger().WithField("vfio-device-count", len(sandboxConfig.HypervisorConfig.VFIODevices)).Error("cold-plug device loop: VFIODevices count")
+	for i, dev := range sandboxConfig.HypervisorConfig.VFIODevices {
+		s.Logger().WithFields(logrus.Fields{
+			"index":          i,
+			"container-path": dev.ContainerPath,
+			"host-path":      dev.HostPath,
+			"cold-plug":      dev.ColdPlug,
+			"port":           dev.Port,
+		}).Error("cold-plug device: about to AddDevice")
 		_, err := s.AddDevice(ctx, dev)
 		if err != nil {
-			s.Logger().WithError(err).Debug("Cannot cold-plug add device")
+			s.Logger().WithError(err).Error("Cannot cold-plug add device")
 			return nil, err
 		}
 	}
@@ -823,8 +831,19 @@ func (s *Sandbox) coldOrHotPlugVFIO(sandboxConfig *SandboxConfig) (bool, error) 
 	// for correct number of PCIe root ports.
 	var vhostUserBlkDevices []config.DeviceInfo
 
+	s.Logger().WithField("container-count", len(sandboxConfig.Containers)).Error("coldOrHotPlugVFIO: scanning containers")
 	for cnt, container := range sandboxConfig.Containers {
+		s.Logger().WithFields(logrus.Fields{
+			"container-index":  cnt,
+			"container-id":     container.ID,
+			"device-info-count": len(container.DeviceInfos),
+		}).Error("coldOrHotPlugVFIO: container device infos")
 		for dev, device := range container.DeviceInfos {
+			s.Logger().WithFields(logrus.Fields{
+				"dev-index":      dev,
+				"container-path": device.ContainerPath,
+				"is-vfio":        deviceManager.IsVFIODevice(device.ContainerPath),
+			}).Error("coldOrHotPlugVFIO: device info")
 			if deviceManager.IsVhostUserBlk(device) {
 				vhostUserBlkDevices = append(vhostUserBlkDevices, device)
 				continue
@@ -2326,21 +2345,34 @@ func (s *Sandbox) AddDevice(ctx context.Context, info config.DeviceInfo) (api.De
 // resolveColdPlugPciPaths queries the hypervisor for the guest PCI paths of
 // all cold-plugged VFIO PCI devices and updates them in the device manager.
 func (s *Sandbox) resolveColdPlugPciPaths(ctx context.Context) error {
+	s.Logger().WithField("cold-plug-vfio", s.config.HypervisorConfig.ColdPlugVFIO).Error("resolveColdPlugPciPaths: enter")
 	if s.config.HypervisorConfig.ColdPlugVFIO == config.NoPort {
+		s.Logger().Error("resolveColdPlugPciPaths: ColdPlugVFIO is NoPort, skipping")
 		return nil
 	}
 
+	s.Logger().Error("resolveColdPlugPciPaths: scanning device manager for VFIO devices")
+
 	var vfioDevs []*config.VFIODev
 	devices := s.devManager.GetAllDevices()
+	s.Logger().WithField("total-devices", len(devices)).Error("resolveColdPlugPciPaths: device manager device count")
 	for _, device := range devices {
+		s.Logger().WithField("device-type", device.DeviceType()).Error("resolveColdPlugPciPaths: checking device")
 		if device.DeviceType() != config.DeviceVFIO {
 			continue
 		}
 		devList, ok := device.GetDeviceInfo().([]*config.VFIODev)
 		if !ok {
+			s.Logger().Error("resolveColdPlugPciPaths: VFIO device has unexpected DeviceInfo type")
 			continue
 		}
+		s.Logger().WithField("vfio-dev-count", len(devList)).Error("resolveColdPlugPciPaths: found VFIO device group")
 		for _, dev := range devList {
+			s.Logger().WithFields(logrus.Fields{
+				"dev-id":   dev.ID,
+				"dev-bdf":  dev.BDF,
+				"dev-type": dev.Type,
+			}).Error("resolveColdPlugPciPaths: VFIO device in group")
 			if dev.Type != config.VFIOAPDeviceMediatedType {
 				vfioDevs = append(vfioDevs, dev)
 			}
@@ -2348,9 +2380,11 @@ func (s *Sandbox) resolveColdPlugPciPaths(ctx context.Context) error {
 	}
 
 	if len(vfioDevs) == 0 {
+		s.Logger().Error("resolveColdPlugPciPaths: no PCI VFIO devices found, skipping")
 		return nil
 	}
 
+	s.Logger().WithField("device-count", len(vfioDevs)).Error("resolveColdPlugPciPaths: resolving guest PCI paths")
 	return s.hypervisor.ResolveColdPlugPciPaths(ctx, vfioDevs)
 }
 

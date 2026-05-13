@@ -2418,7 +2418,7 @@ func (q *qemu) ResolveColdPlugPciPaths(ctx context.Context, devices []*config.VF
 			"device-id":      dev.ID,
 			"device-bdf":     dev.BDF,
 			"guest-pci-path": pciPath,
-		}).Info("Resolved guest PCI path for cold-plugged VFIO device")
+		}).Error("Resolved guest PCI path for cold-plugged VFIO device")
 	}
 	return nil
 }

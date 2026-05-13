@@ -1248,8 +1248,13 @@ func (k *kataAgent) appendVfioDevice(dev ContainerDevice, device api.Device, c *
 			}
 			kataDevice.Options = dev.APDevices
 		} else {
-
 			devBDF := drivers.GetBDF(dev.BDF)
+			k.Logger().WithFields(logrus.Fields{
+				"dev-id":         dev.ID,
+				"dev-bdf":        dev.BDF,
+				"guest-pci-path": dev.GuestPciPath,
+				"dev-type":       dev.Type,
+			}).Error("appendVfioDevice: building option for VFIO device")
 			kataDevice.Options[i] = fmt.Sprintf("0000:%s=%s", devBDF, dev.GuestPciPath)
 		}
 
