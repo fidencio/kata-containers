@@ -1333,6 +1333,11 @@ type Hypervisor interface {
 
 	// check if hypervisor supports built-in rate limiter.
 	IsRateLimiterBuiltin() bool
+
+	// ResolveColdPlugPciPaths resolves guest PCI paths for cold-plugged
+	// VFIO devices by querying the running hypervisor. Must be called
+	// after StartVM.
+	ResolveColdPlugPciPaths(ctx context.Context, devices []*config.VFIODev) error
 }
 
 // KernelParamFields is similar to strings.Fields(), but doesn't split

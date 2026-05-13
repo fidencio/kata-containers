@@ -2400,6 +2400,29 @@ func (q *qemu) AddDevice(ctx context.Context, devInfo interface{}, devType Devic
 	return err
 }
 
+func (q *qemu) ResolveColdPlugPciPaths(ctx context.Context, devices []*config.VFIODev) error {
+	if err := q.qmpSetup(); err != nil {
+		return err
+	}
+
+	for _, dev := range devices {
+		if dev.Type == config.VFIOAPDeviceMediatedType {
+			continue
+		}
+		pciPath, err := q.arch.qomGetPciPath(dev.ID, &q.qmpMonitorCh)
+		if err != nil {
+			return fmt.Errorf("failed to resolve guest PCI path for cold-plugged device %s: %w", dev.ID, err)
+		}
+		dev.GuestPciPath = pciPath
+		q.Logger().WithFields(logrus.Fields{
+			"device-id":      dev.ID,
+			"device-bdf":     dev.BDF,
+			"guest-pci-path": pciPath,
+		}).Info("Resolved guest PCI path for cold-plugged VFIO device")
+	}
+	return nil
+}
+
 // GetVMConsole builds the path of the console where we can read logs coming
 // from the sandbox.
 func (q *qemu) GetVMConsole(ctx context.Context, id string) (string, string, error) {

@@ -1978,6 +1978,10 @@ func (clh *cloudHypervisor) IsRateLimiterBuiltin() bool {
 	return true
 }
 
+func (clh *cloudHypervisor) ResolveColdPlugPciPaths(_ context.Context, _ []*config.VFIODev) error {
+	return nil
+}
+
 func pathExists(path string) bool {
 	if _, err := os.Stat(path); err != nil {
 		return false

@@ -1582,6 +1582,10 @@ func (s *Sandbox) startVM(ctx context.Context, prestartHookFunc func(context.Con
 
 	s.Logger().Info("VM started")
 
+	if err := s.resolveColdPlugPciPaths(ctx); err != nil {
+		return err
+	}
+
 	if s.cw != nil {
 		s.Logger().Debug("console watcher starts")
 		if err := s.cw.start(s); err != nil {
@@ -2317,6 +2321,37 @@ func (s *Sandbox) AddDevice(ctx context.Context, info config.DeviceInfo) (api.De
 	}()
 
 	return add, nil
+}
+
+// resolveColdPlugPciPaths queries the hypervisor for the guest PCI paths of
+// all cold-plugged VFIO PCI devices and updates them in the device manager.
+func (s *Sandbox) resolveColdPlugPciPaths(ctx context.Context) error {
+	if s.config.HypervisorConfig.ColdPlugVFIO == config.NoPort {
+		return nil
+	}
+
+	var vfioDevs []*config.VFIODev
+	devices := s.devManager.GetAllDevices()
+	for _, device := range devices {
+		if device.DeviceType() != config.DeviceVFIO {
+			continue
+		}
+		devList, ok := device.GetDeviceInfo().([]*config.VFIODev)
+		if !ok {
+			continue
+		}
+		for _, dev := range devList {
+			if dev.Type != config.VFIOAPDeviceMediatedType {
+				vfioDevs = append(vfioDevs, dev)
+			}
+		}
+	}
+
+	if len(vfioDevs) == 0 {
+		return nil
+	}
+
+	return s.hypervisor.ResolveColdPlugPciPaths(ctx, vfioDevs)
 }
 
 // GetVfioDeviceGuestPciPath return a device's guest PCI path by its host BDF
