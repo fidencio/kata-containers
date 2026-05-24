@@ -197,6 +197,7 @@ jobs:
         vmm:
           - qemu
           - qemu-runtime-rs
+          - qemu-nvidia-gpu
     runs-on: ubuntu-22.04
     env:
       KATA_HYPERVISOR: ${{ matrix.vmm }}
