@@ -193,17 +193,7 @@ impl VirtSandbox {
     }
 
     async fn record_stop(&self, exit_status: u32, exited_at: std::time::SystemTime) {
-        let mut inner = self.inner.write().await;
-        if inner.state == SandboxState::Stopped {
-            return;
-        }
-
-        inner.state = SandboxState::Stopped;
-        inner.exit_info = Some(SandboxExitInfo {
-            exit_status,
-            exited_at: Some(exited_at),
-        });
-        let _ = self.exit_notify_tx.send(true);
+        Self::record_stop_state(&self.inner, &self.exit_notify_tx, exit_status, exited_at).await;
     }
 
     #[instrument]
@@ -733,6 +723,79 @@ impl VirtSandbox {
             network_created: false,
         })
     }
+
+    async fn stop_after_process_exit(
+        hypervisor: Arc<dyn Hypervisor>,
+        inner: Arc<RwLock<SandboxInner>>,
+        exit_notify_tx: watch::Sender<bool>,
+    ) -> Result<()> {
+        let state = {
+            let sandbox_inner = inner.read().await;
+            sandbox_inner.state
+        };
+
+        if state == SandboxState::Stopped {
+            return Ok(());
+        }
+
+        info!(sl!(), "begin stop sandbox");
+        if state == SandboxState::Init {
+            let _ = hypervisor.stop_vm().await;
+            Self::record_stop_state(&inner, &exit_notify_tx, 0, SystemTime::now()).await;
+            info!(sl!(), "sandbox stopped during Init");
+            return Ok(());
+        }
+
+        hypervisor.stop_vm().await.context("stop vm")?;
+        Self::wait_for_stop(&inner, &exit_notify_tx)
+            .await
+            .context("wait for vm exit after stop")?;
+        info!(sl!(), "sandbox stopped");
+
+        Ok(())
+    }
+
+    async fn record_stop_state(
+        inner: &Arc<RwLock<SandboxInner>>,
+        exit_notify_tx: &watch::Sender<bool>,
+        exit_status: u32,
+        exited_at: SystemTime,
+    ) {
+        let mut inner = inner.write().await;
+        if inner.state == SandboxState::Stopped {
+            return;
+        }
+
+        inner.state = SandboxState::Stopped;
+        inner.exit_info = Some(SandboxExitInfo {
+            exit_status,
+            exited_at: Some(exited_at),
+        });
+        let _ = exit_notify_tx.send(true);
+    }
+
+    async fn wait_for_stop(
+        inner: &Arc<RwLock<SandboxInner>>,
+        exit_notify_tx: &watch::Sender<bool>,
+    ) -> Result<SandboxExitInfo> {
+        {
+            let inner = inner.read().await;
+            if inner.state == SandboxState::Stopped {
+                return Ok(inner.exit_info.clone().unwrap_or_default());
+            }
+        }
+
+        let mut exit_notify_rx = exit_notify_tx.subscribe();
+        while !*exit_notify_rx.borrow() {
+            exit_notify_rx
+                .changed()
+                .await
+                .context("wait for sandbox stop notification")?;
+        }
+
+        let inner = inner.read().await;
+        Ok(inner.exit_info.clone().unwrap_or_default())
+    }
 }
 
 #[async_trait]
@@ -1040,28 +1103,12 @@ impl Sandbox for VirtSandbox {
     }
 
     async fn stop(&self) -> Result<()> {
-        let state = {
-            let sandbox_inner = self.inner.read().await;
-            sandbox_inner.state
-        };
-
-        if state == SandboxState::Stopped {
-            return Ok(());
-        }
-
-        info!(sl!(), "begin stop sandbox");
-        if state == SandboxState::Init {
-            let _ = self.hypervisor.stop_vm().await;
-            self.record_stop(0, SystemTime::now()).await;
-            info!(sl!(), "sandbox stopped during Init");
-            return Ok(());
-        }
-
-        self.hypervisor.stop_vm().await.context("stop vm")?;
-        self.wait().await.context("wait for vm exit after stop")?;
-        info!(sl!(), "sandbox stopped");
-
-        Ok(())
+        Self::stop_after_process_exit(
+            self.hypervisor.clone(),
+            self.inner.clone(),
+            self.exit_notify_tx.clone(),
+        )
+        .await
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -1126,10 +1173,6 @@ impl Sandbox for VirtSandbox {
         let exit_status = cm.wait_process(&process_id).await?;
         info!(sl!(), "container process exited with {:?}", exit_status);
 
-        if cm.is_sandbox_container(&process_id).await {
-            self.stop().await.context("stop sandbox")?;
-        }
-
         let cid = process_id.container_id();
         if cid.is_empty() {
             return Err(anyhow!("container id is empty"));
@@ -1152,6 +1195,32 @@ impl Sandbox for VirtSandbox {
         let msg = Message::new(Action::Event(Arc::new(event)));
         let lock_sender = self.msg_sender.lock().await;
         lock_sender.send(msg).await.context("send exit event")?;
+        info!(
+            sl!(),
+            "published container exit status container={} exit_code={}",
+            cid,
+            exit_status.exit_code
+        );
+
+        // Stop sandbox after TaskExit. Docker/containerd rely on the exit event;
+        // slow guest shutdown must not block delivery or the shim may be SIGKILL'd.
+        if cm.is_sandbox_container(&process_id).await {
+            let hypervisor = self.hypervisor.clone();
+            let inner = self.inner.clone();
+            let exit_notify_tx = self.exit_notify_tx.clone();
+            tokio::spawn(async move {
+                if let Err(err) =
+                    VirtSandbox::stop_after_process_exit(hypervisor, inner, exit_notify_tx).await
+                {
+                    warn!(
+                        sl!(),
+                        "failed to stop sandbox after process exit: {:?}",
+                        err
+                    );
+                }
+            });
+        }
+
         Ok(())
     }
 

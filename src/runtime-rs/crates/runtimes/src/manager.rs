@@ -650,7 +650,16 @@ impl RuntimeHandlerManager {
             TaskRequest::WaitProcess(process_id) => {
                 let exit_status = cm.wait_process(&process_id).await.context("wait process")?;
                 if cm.is_sandbox_container(&process_id).await {
-                    sandbox.stop().await.context("stop sandbox")?;
+                    let sandbox = sandbox.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = sandbox.stop().await {
+                            error!(
+                                sl!(),
+                                "failed to stop sandbox after process exit: {:?}",
+                                e
+                            );
+                        }
+                    });
                 }
                 Ok(TaskResponse::WaitProcess(exit_status))
             }
