@@ -942,14 +942,22 @@ impl QemuInner {
         };
 
         match device {
-            DeviceType::Network(ref network_device) => {
+            DeviceType::Network(mut network_device) => {
                 let (netdev, virtio_net_device) = get_network_device(
                     &self.config,
                     &network_device.config.host_dev_name,
                     network_device.config.guest_mac.clone().unwrap(),
                     &mut None,
                 )?;
-                qmp.hotplug_network_device(&netdev, &virtio_net_device)?
+                qmp.hotplug_network_device(&netdev, &virtio_net_device)?;
+
+                let frontend_id = format!("frontend-{}", virtio_net_device.get_netdev_id());
+                let pci_path = qmp
+                    .get_device_by_qdev_id(&frontend_id)
+                    .context("get network device pci path")?;
+                network_device.config.pci_path = Some(pci_path);
+
+                return Ok(DeviceType::Network(network_device));
             }
             DeviceType::Block(mut block_device) => {
                 let block_driver = &self.config.blockdev_info.block_device_driver;
