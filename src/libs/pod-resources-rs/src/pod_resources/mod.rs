@@ -115,22 +115,193 @@ pub async fn get_pod_cdi_devices(
         .pod_resources
         .ok_or_else(|| anyhow!("cold plug: PodResources is nil"))?;
 
-    // Format device specifications
-    let format_cdi_device_ids = |resource_name: &str, device_ids: &[String]| -> Vec<String> {
-        device_ids
-            .iter()
-            .map(|id| format!("{}={}", resource_name, id))
-            .collect()
-    };
+    Ok(extract_cdi_devices(&pod_resources))
+}
 
-    // Collect all device specifications from all containers
+fn push_unique(
+    devices: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+    dev: String,
+) {
+    if dev.is_empty() {
+        return;
+    }
+
+    if seen.insert(dev.clone()) {
+        devices.push(dev);
+    }
+}
+
+fn extract_cdi_devices(pod_resources: &v1::PodResources) -> Vec<String> {
     let mut devices = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
     for container in &pod_resources.containers {
         for device in &container.devices {
-            let cdi_devices = format_cdi_device_ids(&device.resource_name, &device.device_ids);
-            devices.extend(cdi_devices);
+            for id in &device.device_ids {
+                push_unique(
+                    &mut devices,
+                    &mut seen,
+                    format!("{}={}", device.resource_name, id),
+                );
+            }
+        }
+
+        for dynamic_resource in &container.dynamic_resources {
+            for claim_resource in &dynamic_resource.claim_resources {
+                for cdi_device in &claim_resource.cdi_devices {
+                    push_unique(&mut devices, &mut seen, cdi_device.name.clone());
+                }
+            }
         }
     }
 
-    Ok(devices)
+    devices
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_cdi_devices;
+    use crate::pod_resources::v1::{
+        CdiDevice, ClaimResource, ContainerDevices, ContainerResources, DynamicResource,
+        PodResources,
+    };
+
+    #[test]
+    fn extract_cdi_devices_legacy_only() {
+        let pod_resources = PodResources {
+            name: "pod".to_string(),
+            namespace: "default".to_string(),
+            containers: vec![ContainerResources {
+                name: "ctr0".to_string(),
+                devices: vec![ContainerDevices {
+                    resource_name: "nvidia.com/pgpu".to_string(),
+                    device_ids: vec!["vfio0".to_string(), "vfio1".to_string()],
+                    topology: None,
+                }],
+                cpu_ids: vec![],
+                memory: vec![],
+                dynamic_resources: vec![],
+            }],
+        };
+
+        let got = extract_cdi_devices(&pod_resources);
+        assert_eq!(
+            got,
+            vec![
+                "nvidia.com/pgpu=vfio0".to_string(),
+                "nvidia.com/pgpu=vfio1".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_cdi_devices_dra_only() {
+        let pod_resources = PodResources {
+            name: "pod".to_string(),
+            namespace: "default".to_string(),
+            containers: vec![ContainerResources {
+                name: "ctr0".to_string(),
+                devices: vec![],
+                cpu_ids: vec![],
+                memory: vec![],
+                dynamic_resources: vec![DynamicResource {
+                    claim_name: "gpu-claim".to_string(),
+                    claim_namespace: "default".to_string(),
+                    claim_resources: vec![ClaimResource {
+                        cdi_devices: vec![
+                            CdiDevice {
+                                name: "nvidia.com/gpu=GPU-0".to_string(),
+                            },
+                            CdiDevice {
+                                name: "nvidia.com/gpu=GPU-1".to_string(),
+                            },
+                        ],
+                        driver_name: "gpu.nvidia.com".to_string(),
+                        pool_name: "worker-gpu".to_string(),
+                        device_name: "GPU".to_string(),
+                    }],
+                }],
+            }],
+        };
+
+        let got = extract_cdi_devices(&pod_resources);
+        assert_eq!(
+            got,
+            vec![
+                "nvidia.com/gpu=GPU-0".to_string(),
+                "nvidia.com/gpu=GPU-1".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_cdi_devices_mixed_and_deduped() {
+        let pod_resources = PodResources {
+            name: "pod".to_string(),
+            namespace: "default".to_string(),
+            containers: vec![
+                ContainerResources {
+                    name: "ctr0".to_string(),
+                    devices: vec![ContainerDevices {
+                        resource_name: "nvidia.com/pgpu".to_string(),
+                        device_ids: vec!["vfio0".to_string()],
+                        topology: None,
+                    }],
+                    cpu_ids: vec![],
+                    memory: vec![],
+                    dynamic_resources: vec![DynamicResource {
+                        claim_name: "gpu-claim".to_string(),
+                        claim_namespace: "default".to_string(),
+                        claim_resources: vec![ClaimResource {
+                            cdi_devices: vec![
+                                CdiDevice {
+                                    name: "nvidia.com/gpu=GPU-0".to_string(),
+                                },
+                                CdiDevice {
+                                    name: "nvidia.com/gpu=GPU-0".to_string(),
+                                },
+                            ],
+                            driver_name: "gpu.nvidia.com".to_string(),
+                            pool_name: "worker-gpu".to_string(),
+                            device_name: "GPU".to_string(),
+                        }],
+                    }],
+                },
+                ContainerResources {
+                    name: "ctr1".to_string(),
+                    devices: vec![],
+                    cpu_ids: vec![],
+                    memory: vec![],
+                    dynamic_resources: vec![DynamicResource {
+                        claim_name: "gpu-claim-2".to_string(),
+                        claim_namespace: "default".to_string(),
+                        claim_resources: vec![ClaimResource {
+                            cdi_devices: vec![
+                                CdiDevice {
+                                    name: "nvidia.com/gpu=GPU-1".to_string(),
+                                },
+                                CdiDevice {
+                                    name: "".to_string(),
+                                },
+                            ],
+                            driver_name: "gpu.nvidia.com".to_string(),
+                            pool_name: "worker-gpu".to_string(),
+                            device_name: "GPU".to_string(),
+                        }],
+                    }],
+                },
+            ],
+        };
+
+        let got = extract_cdi_devices(&pod_resources);
+        assert_eq!(
+            got,
+            vec![
+                "nvidia.com/pgpu=vfio0".to_string(),
+                "nvidia.com/gpu=GPU-0".to_string(),
+                "nvidia.com/gpu=GPU-1".to_string()
+            ]
+        );
+    }
 }
