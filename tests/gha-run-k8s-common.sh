@@ -36,6 +36,8 @@ HELM_SNAPSHOTTER_HANDLER_MAPPING="${HELM_SNAPSHOTTER_HANDLER_MAPPING:-}"
 HELM_EXPERIMENTAL_SETUP_SNAPSHOTTER="${HELM_EXPERIMENTAL_SETUP_SNAPSHOTTER:-}"
 HELM_EXPERIMENTAL_FORCE_GUEST_PULL="${HELM_EXPERIMENTAL_FORCE_GUEST_PULL:-}"
 HELM_VERIFY_DEPLOYMENT="${HELM_VERIFY_DEPLOYMENT:-false}"
+HELM_NVIDIA_DRA_ENABLED="${HELM_NVIDIA_DRA_ENABLED:-false}"
+HELM_NVIDIA_DRA_DRIVER_ROOT="${HELM_NVIDIA_DRA_DRIVER_ROOT:-}"
 KATA_DEPLOY_WAIT_TIMEOUT="${KATA_DEPLOY_WAIT_TIMEOUT:-900}"
 KATA_HOST_OS="${KATA_HOST_OS:-}"
 KUBERNETES="${KUBERNETES:-}"
@@ -691,7 +693,11 @@ function helm_helper() {
 		case "${KATA_HYPERVISOR}" in
 			*nvidia-gpu*)
 				# Use NVIDIA GPU example file
-				if [[ -f "${helm_chart_dir}/try-kata-nvidia-gpu.values.yaml" ]]; then
+				if [[ "${HELM_NVIDIA_DRA_ENABLED}" == "true" ]]; then
+					if [[ -f "${helm_chart_dir}/try-kata-nvidia-dra-gpu.values.yaml" ]]; then
+						base_values_file="${helm_chart_dir}/try-kata-nvidia-dra-gpu.values.yaml"
+					fi
+				elif [[ -f "${helm_chart_dir}/try-kata-nvidia-gpu.values.yaml" ]]; then
 					base_values_file="${helm_chart_dir}/try-kata-nvidia-gpu.values.yaml"
 				fi
 				;;
@@ -721,6 +727,11 @@ function helm_helper() {
 	if [[ "${KATA_HYPERVISOR}" == *"nvidia-gpu"* ]]; then
 		yq -i ".node-feature-discovery.enabled = false" "${values_yaml}"
 		yq -i ".runtimeClasses.createDefault = true" "${values_yaml}"
+	fi
+
+	if [[ "${HELM_NVIDIA_DRA_ENABLED}" == "true" ]]; then
+		yq -i ".nvidiaDraDriver.enabled = true" "${values_yaml}"
+		[[ -n "${HELM_NVIDIA_DRA_DRIVER_ROOT}" ]] && yq -i ".nvidiaDraDriver.nvidiaDriverRoot = \"${HELM_NVIDIA_DRA_DRIVER_ROOT}\"" "${values_yaml}"
 	fi
 
 	if [[ -z "${HELM_IMAGE_REFERENCE}" ]]; then
