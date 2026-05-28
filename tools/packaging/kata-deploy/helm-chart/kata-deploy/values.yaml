@@ -501,6 +501,32 @@ env:
 node-feature-discovery:
   enabled: false
 
+# NVIDIA DRA Driver for GPUs (optional subchart)
+#
+# Kata's opinionated defaults target GPU allocation first:
+# - GPU resources enabled
+# - ComputeDomains disabled (opt-in for NVLink/MNNVL environments)
+# - Admission webhook disabled (opt-in when cert-manager is available)
+#
+# If your NVIDIA GPU driver is managed by GPU Operator, set:
+#   nvidiaDriverRoot: /run/nvidia/driver
+#
+# IMPORTANT:
+# - Enabling DRA GPU allocation while also running the legacy NVIDIA device plugin
+#   on the same nodes can cause conflicting resource advertisement paths.
+# - Enable only one GPU allocation path per target node pool.
+nvidiaDraDriver:
+  enabled: false
+  gpuResourcesEnabledOverride: true
+  resources:
+    gpus:
+      enabled: true
+    computeDomains:
+      enabled: false
+  nvidiaDriverRoot: "/"
+  webhook:
+    enabled: false
+
 # Verification
 # Post-install verification to validate Kata Containers is working correctly.
 # When a pod spec is provided, runs a verification pod after installation.

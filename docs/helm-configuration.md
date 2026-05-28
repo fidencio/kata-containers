@@ -48,6 +48,43 @@ Shims can also have configuration options specific to them:
 
 It's best to reference the default `values.yaml` file above for more details.
 
+### NVIDIA DRA (opinionated defaults)
+
+`kata-deploy` can optionally deploy NVIDIA's DRA driver chart as a dependency. Kata uses
+an opinionated GPU-first default profile:
+
+- `nvidiaDraDriver.gpuResourcesEnabledOverride=true`
+- `nvidiaDraDriver.resources.gpus.enabled=true`
+- `nvidiaDraDriver.resources.computeDomains.enabled=false`
+- `nvidiaDraDriver.webhook.enabled=false`
+
+Example:
+
+```yaml
+nvidiaDraDriver:
+  enabled: true
+  gpuResourcesEnabledOverride: true
+  resources:
+    gpus:
+      enabled: true
+    computeDomains:
+      enabled: false
+  nvidiaDriverRoot: "/"
+  webhook:
+    enabled: false
+```
+
+If your NVIDIA GPU driver is managed by GPU Operator, set:
+
+```yaml
+nvidiaDraDriver:
+  nvidiaDriverRoot: "/run/nvidia/driver"
+```
+
+Important: do not enable DRA GPU allocation and the legacy NVIDIA device-plugin GPU
+allocation path on the same target node pool. Use one allocation path per node pool to
+avoid conflicting resource advertisements.
+
 ### Custom Runtimes
 
 Kata allows you to create custom runtime configurations. This is done by overlaying one of the pre-existing runtime configs with user-provided configs. For example, we can use the `qemu-nvidia-gpu` as a base config and overlay our own parameters to it:
@@ -124,6 +161,23 @@ Includes:
 - `qemu-nvidia-gpu` - Standard NVIDIA GPU support (amd64)
 - `qemu-nvidia-gpu-snp` - NVIDIA GPU with AMD SEV-SNP (amd64)
 - `qemu-nvidia-gpu-tdx` - NVIDIA GPU with Intel TDX (amd64)
+
+### [`try-kata-nvidia-dra-gpu.values.yaml`](https://github.com/kata-containers/kata-containers/blob/main/tools/packaging/kata-deploy/helm-chart/kata-deploy/try-kata-nvidia-dra-gpu.values.yaml)
+
+This file enables a Kata-opinionated NVIDIA DRA GPU profile:
+
+```sh
+helm install kata-deploy oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy \
+  --version VERSION \
+  -f try-kata-nvidia-dra-gpu.values.yaml
+```
+
+Includes:
+
+- optional NVIDIA DRA dependency enabled through `nvidiaDraDriver.enabled`
+- GPU resource allocation enabled
+- ComputeDomain disabled (opt-in for NVLink/MNNVL environments)
+- non-TEE NVIDIA GPU shims (`qemu-nvidia-gpu`, `qemu-nvidia-gpu-runtime-rs`)
 
 ### `nodeSelector`
 

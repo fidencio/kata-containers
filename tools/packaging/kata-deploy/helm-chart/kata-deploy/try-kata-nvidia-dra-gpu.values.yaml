@@ -1,0 +1,45 @@
+# Example values file to enable Kata NVIDIA GPU shims with NVIDIA DRA.
+#
+# This profile is intentionally opinionated for Kata:
+# - Enables NVIDIA DRA GPU allocation
+# - Keeps ComputeDomains disabled by default
+# - Enables only non-TEE NVIDIA GPU shims
+# - Removes GPU-Operator-specific RuntimeClass selectors
+#
+# Usage:
+#   helm install kata-deploy oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy \
+#     --version VERSION \
+#     -f try-kata-nvidia-dra-gpu.values.yaml
+
+debug: false
+
+shims:
+  disableAll: true
+  qemu-nvidia-gpu:
+    enabled: true
+    runtimeClass:
+      nodeSelector: {}
+  qemu-nvidia-gpu-runtime-rs:
+    enabled: true
+    runtimeClass:
+      nodeSelector: {}
+
+defaultShim:
+  amd64: qemu-nvidia-gpu
+
+runtimeClasses:
+  enabled: true
+  createDefault: false
+  defaultName: "kata"
+
+nvidiaDraDriver:
+  enabled: true
+  gpuResourcesEnabledOverride: true
+  resources:
+    gpus:
+      enabled: true
+    computeDomains:
+      enabled: false
+  nvidiaDriverRoot: "/"
+  webhook:
+    enabled: false
