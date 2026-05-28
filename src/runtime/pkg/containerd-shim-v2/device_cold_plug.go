@@ -122,18 +122,7 @@ func getDeviceSpec(ctx context.Context, socket string, ann map[string]string) ([
 		return nil, fmt.Errorf("cold plug: PodResources is nil")
 	}
 
-	// Process results
-	var devices []string
-	for _, container := range podRes.Containers {
-		for _, d := range container.Devices {
-			shimLog.WithField("container", container.Name).Debugf("Pod Resources Device: %s = %v\n",
-				d.ResourceName, d.DeviceIds)
-			cdiDevs := formatCDIDevIDs(d.ResourceName, d.DeviceIds)
-			devices = append(devices, cdiDevs...)
-		}
-	}
-
-	return devices, nil
+	return extractCDIDevices(podRes), nil
 }
 
 // formatCDIDevIDs formats the way CDI package expects
@@ -143,6 +132,51 @@ func formatCDIDevIDs(specName string, devIDs []string) []string {
 		result = append(result, fmt.Sprintf("%s=%s", specName, id))
 	}
 	return result
+}
+
+func appendUniqueDevice(devices []string, seen map[string]struct{}, device string) []string {
+	if device == "" {
+		return devices
+	}
+
+	if _, ok := seen[device]; ok {
+		return devices
+	}
+
+	seen[device] = struct{}{}
+	return append(devices, device)
+}
+
+// extractCDIDevices converts kubelet PodResources responses into CDI FQNs.
+// It supports both legacy device-plugin resources (`container.devices`) and
+// DRA allocations (`container.dynamic_resources[*].claim_resources[*].cdi_devices[*].name`).
+func extractCDIDevices(podRes *podresourcesv1.PodResources) []string {
+	if podRes == nil {
+		return nil
+	}
+
+	devices := []string{}
+	seen := make(map[string]struct{})
+
+	for _, container := range podRes.Containers {
+		for _, d := range container.Devices {
+			shimLog.WithField("container", container.Name).Debugf("Pod Resources Device: %s = %v\n",
+				d.ResourceName, d.DeviceIds)
+			for _, cdiDev := range formatCDIDevIDs(d.ResourceName, d.DeviceIds) {
+				devices = appendUniqueDevice(devices, seen, cdiDev)
+			}
+		}
+
+		for _, dynamicResource := range container.DynamicResources {
+			for _, claimResource := range dynamicResource.ClaimResources {
+				for _, cdiDevice := range claimResource.CDIDevices {
+					devices = appendUniqueDevice(devices, seen, cdiDevice.GetName())
+				}
+			}
+		}
+	}
+
+	return devices
 }
 
 // getPodIdentifiers returns the pod name and namespace from annotations.
