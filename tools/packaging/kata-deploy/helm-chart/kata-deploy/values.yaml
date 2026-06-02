@@ -53,6 +53,34 @@ job:
       operator: DoesNotExist
     - key: node-role.kubernetes.io/master
       operator: DoesNotExist
+  # Node selection for the UNINSTALL (pre-delete hook) Jobs. This is deliberately
+  # SEPARATE from the install selection above: by default uninstall targets every
+  # node where Kata was actually installed (i.e. carries the
+  # katacontainers.io/kata-runtime label set by the install label stage), rather
+  # than re-evaluating the install selector. This makes uninstall robust to
+  # install-time selector drift (relabeled nodes, etc.).
+  #
+  # Same precedence/semantics as the install selection:
+  #   1. cleanup.nodes (explicit node names) - used verbatim.
+  #   2. cleanup.nodeSelector (equality map) ANDed with
+  #      cleanup.nodeSelectorExpressions (In, NotIn, Exists, DoesNotExist).
+  #
+  # Examples:
+  #   # Only uninstall from specific nodes:
+  #   job:
+  #     cleanup:
+  #       nodes: ["worker-1"]
+  #   # Mirror the install selector instead of the kata-runtime label:
+  #   job:
+  #     cleanup:
+  #       nodeSelectorExpressions:
+  #         - { key: node-role.kubernetes.io/control-plane, operator: DoesNotExist }
+  cleanup:
+    nodes: []
+    nodeSelector: {}
+    nodeSelectorExpressions:
+      - key: katacontainers.io/kata-runtime
+        operator: Exists
   # How long finished per-node install Jobs are retained before automatic
   # garbage collection (seconds). Cleanup (pre-delete hook) Jobs use the same.
   ttlSecondsAfterFinished: 600

@@ -1,0 +1,87 @@
+{{- /*
+Per-node staged cleanup Jobs (deploymentMode: job).
+
+The mirror image of the install Jobs: one Job is emitted per targeted node
+(see kata-deploy.jobNodeNames) and runs the install pipeline in reverse, then
+exits:
+
+  unlabel -> revert-cri   (initContainers, run sequentially)
+  remove-artifacts        (main container)
+
+These are Helm pre-delete hooks: on `helm uninstall` they run while the
+release's resources (notably the kept ServiceAccount/RBAC) still exist, undo
+the host changes, and complete before the resources are torn down. The kept
+RBAC is removed afterwards by the post-delete rb-cleanup Job.
+
+Ordering rationale (reverse of install):
+  - unlabel first  : stop the scheduler from placing kata workloads here
+                     (unprivileged, Kubernetes API only).
+  - revert-cri next: remove CRI drop-ins and restart the runtime
+                     (privileged, host nsenter; skipped when already absent).
+  - remove-artifacts last: delete kata artifacts/config from the host
+                     (privileged, mounts the host; skipped when already gone).
+
+Each stage action is idempotent, so a re-run (or a node that was never fully
+installed) is safe and cheap.
+*/ -}}
+{{- if eq (.Values.deploymentMode | default "daemonset") "job" }}
+{{- $root := . }}
+{{- $base := .Chart.Name }}
+{{- if .Values.env.multiInstallSuffix }}
+{{- $base = printf "%s-%s" .Chart.Name .Values.env.multiInstallSuffix }}
+{{- end }}
+{{- $sa := include "kata-deploy.serviceAccountName" . }}
+{{- $names := include "kata-deploy.cleanupNodeNames" . | trim }}
+{{- if $names }}
+{{- range $node := (splitList " " $names) }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-cleanup-%s" $base $node | trunc 63 | trimSuffix "-" }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    kata-deploy/stage: cleanup
+    kata-deploy/node: {{ $node | quote }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $root.Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ $root.Values.job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+        app.kubernetes.io/instance: {{ $root.Release.Name }}
+        kata-deploy/stage: cleanup
+        kata-deploy/node: {{ $node | quote }}
+    spec:
+{{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+      serviceAccountName: {{ $sa }}
+      restartPolicy: Never
+      nodeName: {{ $node | quote }}
+      hostPID: true
+{{- with $root.Values.tolerations }}
+      tolerations:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+{{- with $root.Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+{{- end }}
+      initContainers:
+{{- include "kata-deploy.stageContainer" (dict "root" $root "name" "unlabel" "action" "cleanup-stage-unlabel" "privileged" false "mountHost" false) | nindent 6 }}
+{{- include "kata-deploy.stageContainer" (dict "root" $root "name" "revert-cri" "action" "cleanup-stage-revert-cri" "privileged" true "mountHost" true) | nindent 6 }}
+      containers:
+{{- include "kata-deploy.stageContainer" (dict "root" $root "name" "remove-artifacts" "action" "cleanup-stage-remove-artifacts" "privileged" true "mountHost" true) | nindent 6 }}
+      volumes:
+{{- include "kata-deploy.commonVolumes" $root | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -577,29 +577,28 @@ e.g. `{{- include "kata-deploy.commonEnv" . | nindent 8 }}`.
 {{- end -}}
 
 {{/*
-Compute the list of node names targeted by deploymentMode: job.
+Generic node-name selector shared by the install and cleanup Job fan-outs.
+Arguments (dict):
+  nodes - explicit list of node names; if non-empty it is used verbatim.
+  eq    - equality label selector map (every key=value must be present).
+  exprs - list of {key, operator, values} requirements (k8s label-selector
+          semantics: In / NotIn / Exists / DoesNotExist).
 
-If `.Values.job.nodes` is non-empty, that explicit list is used verbatim.
-Otherwise the cluster's nodes are discovered via `lookup` (only populated during
-a real install/upgrade, empty during `helm template`) and filtered by BOTH:
-  - `.Values.job.nodeSelector` (equality map: every key=value must be present), and
-  - `.Values.job.nodeSelectorExpressions` (Kubernetes-style label selector
-    requirements with operators In / NotIn / Exists / DoesNotExist).
-A node is returned only when it satisfies every entry of both selectors. By
-default the expressions select worker (non-control-plane) nodes; set the
-expressions to [] to target all discovered nodes.
+When `nodes` is empty, the cluster's nodes are discovered via `lookup` (only
+populated during a real install/upgrade/uninstall, empty during `helm template`)
+and filtered by `eq` ANDed with `exprs`.
 
 Returns a space-separated list of node names (possibly empty).
 */}}
-{{- define "kata-deploy.jobNodeNames" -}}
+{{- define "kata-deploy.selectNodeNames" -}}
 {{- $names := list -}}
-{{- if .Values.job.nodes -}}
-{{- range .Values.job.nodes -}}
+{{- if .nodes -}}
+{{- range .nodes -}}
 {{- $names = append $names . -}}
 {{- end -}}
 {{- else -}}
-{{- $eq := .Values.job.nodeSelector | default dict -}}
-{{- $exprs := .Values.job.nodeSelectorExpressions | default list -}}
+{{- $eq := .eq | default dict -}}
+{{- $exprs := .exprs | default list -}}
 {{- range (lookup "v1" "Node" "" "").items -}}
 {{- $node := . -}}
 {{- $labels := (.metadata.labels | default dict) -}}
@@ -609,6 +608,34 @@ Returns a space-separated list of node names (possibly empty).
 {{- end -}}
 {{- end -}}
 {{- join " " $names -}}
+{{- end -}}
+
+{{/*
+Nodes targeted by the per-node INSTALL Jobs (deploymentMode: job).
+Driven by `.Values.job.nodes` / `.Values.job.nodeSelector` /
+`.Values.job.nodeSelectorExpressions`; defaults to worker (non-control-plane)
+nodes. Returns a space-separated list of node names.
+*/}}
+{{- define "kata-deploy.jobNodeNames" -}}
+{{- include "kata-deploy.selectNodeNames" (dict
+    "nodes" .Values.job.nodes
+    "eq" (.Values.job.nodeSelector | default dict)
+    "exprs" (.Values.job.nodeSelectorExpressions | default list)) -}}
+{{- end -}}
+
+{{/*
+Nodes targeted by the per-node CLEANUP Jobs (deploymentMode: job, pre-delete).
+Driven by `.Values.job.cleanup.*`, independent of the install selector so that
+uninstall targets where Kata was actually installed. Defaults to every node
+carrying the katacontainers.io/kata-runtime label (set by the install label
+stage). Returns a space-separated list of node names.
+*/}}
+{{- define "kata-deploy.cleanupNodeNames" -}}
+{{- $cleanup := .Values.job.cleanup | default dict -}}
+{{- include "kata-deploy.selectNodeNames" (dict
+    "nodes" ($cleanup.nodes | default list)
+    "eq" ($cleanup.nodeSelector | default dict)
+    "exprs" ($cleanup.nodeSelectorExpressions | default list)) -}}
 {{- end -}}
 
 {{/*
@@ -641,7 +668,7 @@ so callers can use it directly in an `if`.
 {{- else if eq $expr.operator "NotIn" -}}
 {{- if (and $has (has $val ($expr.values | default list))) -}}{{- $match = false -}}{{- end -}}
 {{- else -}}
-{{- fail (printf "job.nodeSelectorExpressions: unsupported operator %q for key %q (use In, NotIn, Exists, DoesNotExist)" $expr.operator $expr.key) -}}
+{{- fail (printf "nodeSelectorExpressions: unsupported operator %q for key %q (use In, NotIn, Exists, DoesNotExist)" $expr.operator $expr.key) -}}
 {{- end -}}
 {{- end -}}
 {{- if $match -}}1{{- end -}}

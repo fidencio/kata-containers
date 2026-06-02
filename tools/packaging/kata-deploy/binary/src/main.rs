@@ -60,7 +60,8 @@ enum Action {
     #[clap(name = "cleanup-stage-revert-cri")]
     CleanupStageRevertCri,
     /// Cleanup stage 3 of a staged (JobSet) uninstall: remove kata
-    /// artifacts/config/symlinks from the host.
+    /// artifacts/config/symlinks from the host. Privileged (mutates the host
+    /// filesystem under the install dir).
     #[clap(name = "cleanup-stage-remove-artifacts")]
     CleanupStageRemoveArtifacts,
     /// Internal: entered via re-exec after install completes. Holds the
