@@ -37,7 +37,9 @@ enum Action {
     #[clap(name = "install-stage-host-check")]
     InstallStageHostCheck,
     /// Stage 1 of a staged (JobSet) install: install kata artifacts/config on
-    /// the host. Does not touch CRI configuration.
+    /// the host and set up configured snapshotters. Does not touch CRI
+    /// configuration, but is still privileged (host writes + snapshotter setup
+    /// shell into the host via nsenter).
     #[clap(name = "install-stage-artifacts")]
     InstallStageArtifacts,
     /// Stage 2 of a staged (JobSet) install: write CRI drop-ins, restart the
@@ -420,9 +422,10 @@ async fn install_stage_host_check(config: &config::Config, runtime: &str) -> Res
     Ok(())
 }
 
-/// Install stage 1 (artifacts): place kata artifacts/config on the host. This
-/// does not touch CRI configuration, so it can run without the privileged host
-/// access the CRI stage requires.
+/// Install stage 1 (artifacts): place kata artifacts/config on the host and set
+/// up any configured snapshotters. This does not touch CRI configuration, but it
+/// still needs privileged host access: writing under the host install dir and
+/// the snapshotter setup (e.g. nydus) shell into the host via nsenter.
 async fn install_stage_artifacts(config: &config::Config, runtime: &str) -> Result<()> {
     info!("install (artifacts): installing kata artifacts on host");
 

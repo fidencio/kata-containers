@@ -577,6 +577,117 @@ e.g. `{{- include "kata-deploy.commonEnv" . | nindent 8 }}`.
 {{- end -}}
 
 {{/*
+Compute the list of node names targeted by deploymentMode: job.
+
+If `.Values.job.nodes` is non-empty, that explicit list is used verbatim.
+Otherwise the cluster's nodes are discovered via `lookup` (only populated during
+a real install/upgrade, empty during `helm template`) and filtered by BOTH:
+  - `.Values.job.nodeSelector` (equality map: every key=value must be present), and
+  - `.Values.job.nodeSelectorExpressions` (Kubernetes-style label selector
+    requirements with operators In / NotIn / Exists / DoesNotExist).
+A node is returned only when it satisfies every entry of both selectors. By
+default the expressions select worker (non-control-plane) nodes; set the
+expressions to [] to target all discovered nodes.
+
+Returns a space-separated list of node names (possibly empty).
+*/}}
+{{- define "kata-deploy.jobNodeNames" -}}
+{{- $names := list -}}
+{{- if .Values.job.nodes -}}
+{{- range .Values.job.nodes -}}
+{{- $names = append $names . -}}
+{{- end -}}
+{{- else -}}
+{{- $eq := .Values.job.nodeSelector | default dict -}}
+{{- $exprs := .Values.job.nodeSelectorExpressions | default list -}}
+{{- range (lookup "v1" "Node" "" "").items -}}
+{{- $node := . -}}
+{{- $labels := (.metadata.labels | default dict) -}}
+{{- if include "kata-deploy.nodeMatchesSelector" (dict "labels" $labels "eq" $eq "exprs" $exprs) -}}
+{{- $names = append $names $node.metadata.name -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- join " " $names -}}
+{{- end -}}
+
+{{/*
+Evaluate whether a node's labels satisfy the job selector. Arguments (dict):
+  labels - the node's labels map
+  eq     - equality selector map (every key=value must match)
+  exprs  - list of {key, operator, values} requirements (k8s semantics:
+           In, NotIn, Exists, DoesNotExist)
+
+Emits a non-empty string ("1") when the node matches, empty string otherwise,
+so callers can use it directly in an `if`.
+*/}}
+{{- define "kata-deploy.nodeMatchesSelector" -}}
+{{- $labels := .labels -}}
+{{- $match := true -}}
+{{- range $k, $v := .eq -}}
+{{- if ne (index $labels $k) $v -}}
+{{- $match = false -}}
+{{- end -}}
+{{- end -}}
+{{- range $expr := .exprs -}}
+{{- $has := hasKey $labels $expr.key -}}
+{{- $val := index $labels $expr.key -}}
+{{- if eq $expr.operator "Exists" -}}
+{{- if not $has -}}{{- $match = false -}}{{- end -}}
+{{- else if eq $expr.operator "DoesNotExist" -}}
+{{- if $has -}}{{- $match = false -}}{{- end -}}
+{{- else if eq $expr.operator "In" -}}
+{{- if not (and $has (has $val ($expr.values | default list))) -}}{{- $match = false -}}{{- end -}}
+{{- else if eq $expr.operator "NotIn" -}}
+{{- if (and $has (has $val ($expr.values | default list))) -}}{{- $match = false -}}{{- end -}}
+{{- else -}}
+{{- fail (printf "job.nodeSelectorExpressions: unsupported operator %q for key %q (use In, NotIn, Exists, DoesNotExist)" $expr.operator $expr.key) -}}
+{{- end -}}
+{{- end -}}
+{{- if $match -}}1{{- end -}}
+{{- end -}}
+
+{{/*
+Service account name (honoring multiInstallSuffix), shared by all kata-deploy
+workloads (DaemonSet and staged Jobs).
+*/}}
+{{- define "kata-deploy.serviceAccountName" -}}
+{{- if .Values.env.multiInstallSuffix -}}
+{{ .Chart.Name }}-sa-{{ .Values.env.multiInstallSuffix }}
+{{- else -}}
+{{ .Chart.Name }}-sa
+{{- end -}}
+{{- end -}}
+
+{{/*
+Render a single staged-pipeline container that runs one kata-deploy stage action.
+Used by the per-node staged install/cleanup Jobs (deploymentMode: job).
+
+Arguments (dict):
+  root        - the top-level context (.)
+  name        - container name
+  action      - kata-deploy subcommand (e.g. install-stage-cri)
+  privileged  - bool, whether the container runs privileged (host nsenter/restart)
+  mountHost   - bool, whether to mount the host paths (crio/containerd/host)
+
+Emitted at column 0; indent with `nindent` at the call site.
+*/}}
+{{- define "kata-deploy.stageContainer" -}}
+- name: {{ .name }}
+  image: {{ include "kata-deploy.image" .root }}
+  imagePullPolicy: {{ .root.Values.imagePullPolicy }}
+  command: ["/usr/bin/kata-deploy", "{{ .action }}"]
+  env:
+{{- include "kata-deploy.commonEnv" .root | nindent 4 }}
+  securityContext:
+    privileged: {{ .privileged }}
+{{- if .mountHost }}
+  volumeMounts:
+{{- include "kata-deploy.commonVolumeMounts" .root | nindent 4 }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Common volumeMounts for any pod that runs the kata-deploy binary against the
 host. Emitted at column 0; indent with `nindent` at the call site.
 */}}

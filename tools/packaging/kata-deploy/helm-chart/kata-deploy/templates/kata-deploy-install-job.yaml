@@ -1,0 +1,81 @@
+{{- /*
+Per-node staged install Jobs (deploymentMode: job).
+
+One Job is emitted per targeted node (see kata-deploy.jobNodeNames). Each Job's
+pod runs the install pipeline as ordered initContainers and exits:
+
+  host-check -> artifacts -> cri   (initContainers, run sequentially)
+  label                            (main container)
+
+Stages are pinned to a single node via nodeName. Every host-touching stage runs
+privileged with hostPID, because they shell into the host via nsenter (host-check
+and cri restart/configure the runtime; artifacts sets up snapshotters, e.g.
+nydus). Only the label stage is unprivileged (Kubernetes-API only).
+
+These are Helm post-install/post-upgrade hooks with before-hook-creation delete
+policy, so re-running `helm upgrade` re-creates and re-runs them. The binary's
+stage actions are idempotent (each skips when already applied), so re-runs are
+cheap and also pick up newly added nodes.
+*/ -}}
+{{- if eq (.Values.deploymentMode | default "daemonset") "job" }}
+{{- $root := . }}
+{{- $base := .Chart.Name }}
+{{- if .Values.env.multiInstallSuffix }}
+{{- $base = printf "%s-%s" .Chart.Name .Values.env.multiInstallSuffix }}
+{{- end }}
+{{- $sa := include "kata-deploy.serviceAccountName" . }}
+{{- $names := include "kata-deploy.jobNodeNames" . | trim }}
+{{- if $names }}
+{{- range $node := (splitList " " $names) }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-install-%s" $base $node | trunc 63 | trimSuffix "-" }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    kata-deploy/stage: install
+    kata-deploy/node: {{ $node | quote }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ $root.Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ $root.Values.job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+        app.kubernetes.io/instance: {{ $root.Release.Name }}
+        kata-deploy/stage: install
+        kata-deploy/node: {{ $node | quote }}
+    spec:
+{{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+      serviceAccountName: {{ $sa }}
+      restartPolicy: Never
+      nodeName: {{ $node | quote }}
+      hostPID: true
+{{- with $root.Values.tolerations }}
+      tolerations:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+{{- with $root.Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+{{- end }}
+      initContainers:
+{{- include "kata-deploy.stageContainer" (dict "root" $root "name" "host-check" "action" "install-stage-host-check" "privileged" true "mountHost" true) | nindent 6 }}
+{{- include "kata-deploy.stageContainer" (dict "root" $root "name" "artifacts" "action" "install-stage-artifacts" "privileged" true "mountHost" true) | nindent 6 }}
+{{- include "kata-deploy.stageContainer" (dict "root" $root "name" "cri" "action" "install-stage-cri" "privileged" true "mountHost" true) | nindent 6 }}
+      containers:
+{{- include "kata-deploy.stageContainer" (dict "root" $root "name" "label" "action" "install-stage-label" "privileged" false "mountHost" false) | nindent 6 }}
+      volumes:
+{{- include "kata-deploy.commonVolumes" $root | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

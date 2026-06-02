@@ -1,3 +1,64 @@
+# Deployment model for installing/cleaning up Kata on nodes.
+#   daemonset: (default) the long-running kata-deploy DaemonSet installs Kata on
+#              every matching node and reverts it on pod termination (uninstall).
+#   job:       a short-lived, staged per-node install Job (one per node) runs the
+#              install pipeline as ordered initContainers and exits. Cleanup runs
+#              as a per-node pre-delete hook Job. There is no always-on component.
+#
+# NOTE on "job" mode and new nodes:
+#   The set of per-node Jobs is computed at `helm install`/`helm upgrade` time by
+#   enumerating the cluster's nodes. When you add nodes later, re-run
+#   `helm upgrade` to create install Jobs for the new nodes. This is intentional:
+#   it avoids running an always-on privileged component on every node.
+deploymentMode: daemonset  # daemonset | job
+
+# Settings specific to deploymentMode: job
+job:
+  # How to choose which nodes get a per-node install/cleanup Job. Precedence:
+  #   1. job.nodes (explicit list of node names) - if non-empty, used verbatim.
+  #   2. otherwise the cluster's nodes are discovered at apply time (via `lookup`)
+  #      and filtered by BOTH:
+  #        - job.nodeSelector  : equality map (every key=value must be present), and
+  #        - job.nodeSelectorExpressions : Kubernetes-style label selector
+  #          requirements (operators In, NotIn, Exists, DoesNotExist).
+  #      A node is targeted only when it satisfies every entry of both.
+  #
+  # DEFAULT: target worker (non-control-plane) nodes, so no custom labeling is
+  # required. Override these freely:
+  #   - Target nodes with a specific label:
+  #       job:
+  #         nodeSelector: { kata-containers: "enabled" }
+  #   - Target every node (including control-plane), e.g. single-node clusters/CI:
+  #       job:
+  #         nodeSelectorExpressions: []
+  #   - Richer expressions:
+  #       job:
+  #         nodeSelectorExpressions:
+  #           - { key: kubernetes.io/os, operator: In, values: ["linux"] }
+  #           - { key: node-role.kubernetes.io/control-plane, operator: DoesNotExist }
+  #   - Pin to explicit nodes (also handy for `helm template`):
+  #       job:
+  #         nodes: ["worker-1", "worker-2"]
+  nodes: []
+  # Equality label selector (ANDed with nodeSelectorExpressions). Ignored when
+  # job.nodes is set. Empty by default.
+  nodeSelector: {}
+  # Kubernetes-style label selector requirements (ANDed with nodeSelector).
+  # Each entry: { key, operator, values }. operator is one of:
+  #   In | NotIn (values required) | Exists | DoesNotExist (values must be empty).
+  # Default selects nodes that are NOT control-plane/master (i.e. worker nodes).
+  # Set to [] to disable role filtering and target all discovered nodes.
+  nodeSelectorExpressions:
+    - key: node-role.kubernetes.io/control-plane
+      operator: DoesNotExist
+    - key: node-role.kubernetes.io/master
+      operator: DoesNotExist
+  # How long finished per-node install Jobs are retained before automatic
+  # garbage collection (seconds). Cleanup (pre-delete hook) Jobs use the same.
+  ttlSecondsAfterFinished: 600
+  # Number of retries for a failed per-node Job before it is marked failed.
+  backoffLimit: 3
+
 imagePullPolicy: Always
 
 imagePullSecrets: []
