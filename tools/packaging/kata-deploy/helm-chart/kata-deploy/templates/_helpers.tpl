@@ -625,17 +625,36 @@ nodes. Returns a space-separated list of node names.
 
 {{/*
 Nodes targeted by the per-node CLEANUP Jobs (deploymentMode: job, pre-delete).
-Driven by `.Values.job.cleanup.*`, independent of the install selector so that
-uninstall targets where Kata was actually installed. Defaults to every node
-carrying the katacontainers.io/kata-runtime label (set by the install label
-stage). Returns a space-separated list of node names.
+
+IMPORTANT: cleanup Jobs are Helm pre-delete hooks. Helm renders and stores hook
+manifests at install/upgrade time and replays them verbatim at `helm uninstall`
+(it does NOT re-template, so `lookup` is evaluated at install/upgrade time, not
+at delete time). The node set must therefore be derivable at render time.
+
+By default we mirror the INSTALL selection, so uninstall targets exactly the
+nodes install targeted (the set is frozen at the last install/upgrade, which is
+precisely where Kata was installed). A label-based default such as
+"nodes with katacontainers.io/kata-runtime" cannot work here: that label is
+applied by the install Jobs, which run AFTER the cleanup hook has already been
+rendered, so the lookup would always be empty.
+
+Users can still override via `.Values.job.cleanup.*` (nodes / nodeSelector /
+nodeSelectorExpressions) to clean a different set; if any of those is set we use
+them instead of mirroring install. Returns a space-separated list of node names.
 */}}
 {{- define "kata-deploy.cleanupNodeNames" -}}
 {{- $cleanup := .Values.job.cleanup | default dict -}}
+{{- $cNodes := $cleanup.nodes | default list -}}
+{{- $cEq := $cleanup.nodeSelector | default dict -}}
+{{- $cExprs := $cleanup.nodeSelectorExpressions | default list -}}
+{{- if and (eq (len $cNodes) 0) (eq (len $cEq) 0) (eq (len $cExprs) 0) -}}
+{{- include "kata-deploy.jobNodeNames" . -}}
+{{- else -}}
 {{- include "kata-deploy.selectNodeNames" (dict
-    "nodes" ($cleanup.nodes | default list)
-    "eq" ($cleanup.nodeSelector | default dict)
-    "exprs" ($cleanup.nodeSelectorExpressions | default list)) -}}
+    "nodes" $cNodes
+    "eq" $cEq
+    "exprs" $cExprs) -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

@@ -2,8 +2,8 @@
 Per-node staged cleanup Jobs (deploymentMode: job).
 
 The mirror image of the install Jobs: one Job is emitted per targeted node
-(see kata-deploy.jobNodeNames) and runs the install pipeline in reverse, then
-exits:
+(see kata-deploy.cleanupNodeNames) and runs the install pipeline in reverse,
+then exits:
 
   unlabel -> revert-cri   (initContainers, run sequentially)
   remove-artifacts        (main container)
@@ -12,6 +12,12 @@ These are Helm pre-delete hooks: on `helm uninstall` they run while the
 release's resources (notably the kept ServiceAccount/RBAC) still exist, undo
 the host changes, and complete before the resources are torn down. The kept
 RBAC is removed afterwards by the post-delete rb-cleanup Job.
+
+Node selection note: because Helm renders and stores hook manifests at
+install/upgrade time (and replays them verbatim at uninstall, with no
+re-templating), the cleanup node set is frozen at the last install/upgrade.
+By default it mirrors the install selection (see kata-deploy.cleanupNodeNames),
+so uninstall targets exactly the nodes install targeted.
 
 Ordering rationale (reverse of install):
   - unlabel first  : stop the scheduler from placing kata workloads here

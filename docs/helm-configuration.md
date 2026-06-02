@@ -86,6 +86,116 @@ customRuntimes:
 
 Again, view the default [`values.yaml`](#parameters) file for more details.
 
+## Deployment Modes (DaemonSet vs Job)
+
+The chart can install Kata on nodes in one of two ways, selected with the
+top-level `deploymentMode` value:
+
+- **`daemonset`** (default): the long-running `kata-deploy` DaemonSet installs
+  Kata on every matching node and reverts it when the pod is terminated (i.e. on
+  uninstall). This is the historical behavior and is unchanged.
+- **`job`**: a short-lived, staged per-node install `Job` (one per targeted
+  node) runs the install pipeline as ordered `initContainers` and then exits:
+
+  ```
+  host-check -> artifacts -> cri   (initContainers)  ->  label (main)
+  ```
+
+  On `helm uninstall`, a per-node `pre-delete` hook Job runs the same pipeline
+  in reverse (`unlabel -> revert-cri -> remove-artifacts`). Unlike the DaemonSet,
+  **nothing keeps running on the node after installation completes.**
+
+```yaml title="values.yaml"
+deploymentMode: job
+```
+
+### Adding nodes in `job` mode
+
+The set of per-node Jobs is computed at `helm install` / `helm upgrade` time by
+enumerating the cluster's nodes. There is **no controller watching for new
+nodes**, so when you add nodes later, re-run `helm upgrade` to create install
+Jobs for them:
+
+```sh
+helm upgrade kata-deploy "${CHART}" --version "${VERSION}" --reuse-values
+```
+
+Each per-node stage is idempotent (it skips when already applied), so the
+upgrade only does real work on the newly added nodes.
+
+### Choosing which nodes get a Job
+
+In `job` mode, node selection is configured under the `job` key, with the
+following precedence (highest first):
+
+1. `job.nodes`: an explicit list of node names, used verbatim.
+2. `job.nodeSelector` (an equality map) **ANDed with**
+   `job.nodeSelectorExpressions` (Kubernetes label-selector requirements using
+   the operators `In`, `NotIn`, `Exists`, `DoesNotExist`).
+
+By **default the expressions target worker (non-control-plane) nodes**, so no
+custom node labeling is required (this differs from the DaemonSet `nodeSelector`
+examples above, which rely on you labeling nodes). Override as needed:
+
+```yaml title="values.yaml"
+# Target nodes carrying a specific label:
+job:
+  nodeSelector:
+    kata-containers: "enabled"
+
+# Target every node, including control-plane (e.g. single-node clusters / CI):
+job:
+  nodeSelectorExpressions: []
+
+# Richer expressions:
+job:
+  nodeSelectorExpressions:
+    - { key: kubernetes.io/os, operator: In, values: ["linux"] }
+    - { key: node-role.kubernetes.io/control-plane, operator: DoesNotExist }
+
+# Pin to explicit nodes (also handy for `helm template`):
+job:
+  nodes: ["worker-1", "worker-2"]
+```
+
+### Choosing which nodes are cleaned up on uninstall
+
+The cleanup Jobs are Helm **`pre-delete` hooks**. Helm renders and *stores* hook
+manifests at install/upgrade time and replays them verbatim on `helm uninstall`
+— it does **not** re-template at delete time, so any `lookup` is evaluated at
+install/upgrade time, never at uninstall. The cleanup node set therefore has to
+be derivable at render time. (A label-based default such as "every node with the
+`katacontainers.io/kata-runtime` label" cannot work: that label is applied by
+the install Jobs, which run *after* the cleanup hook has already been rendered
+and stored, so the lookup would always be empty and nothing would clean up.)
+
+By **default, uninstall mirrors the install selection**, so it targets exactly
+the nodes install targeted. That set is frozen at the last
+`helm install`/`helm upgrade` — which is precisely where Kata was installed —
+and it stays correct even if node labels drift afterwards, since it reflects the
+install-time state rather than re-evaluating a selector at delete time.
+
+You can override it under `job.cleanup`, with the same precedence/semantics as
+install (`cleanup.nodes`, then `cleanup.nodeSelector` ANDed with
+`cleanup.nodeSelectorExpressions`). Setting any of these disables the
+install-mirror and uses your selection instead:
+
+```yaml title="values.yaml"
+# Only uninstall from specific nodes:
+job:
+  cleanup:
+    nodes: ["worker-1"]
+
+# Use an explicit selector instead of mirroring install:
+job:
+  cleanup:
+    nodeSelectorExpressions:
+      - { key: node-role.kubernetes.io/control-plane, operator: DoesNotExist }
+```
+
+See the default [`values.yaml`](#parameters) for the remaining `job.*` options
+(e.g. `ttlSecondsAfterFinished`, `backoffLimit`).
+
 ## Examples
 
 We provide a few examples that you can pass to helm via the `-f`/`--values` flag.

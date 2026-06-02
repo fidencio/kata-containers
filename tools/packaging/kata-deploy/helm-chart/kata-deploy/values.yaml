@@ -53,14 +53,28 @@ job:
       operator: DoesNotExist
     - key: node-role.kubernetes.io/master
       operator: DoesNotExist
-  # Node selection for the UNINSTALL (pre-delete hook) Jobs. This is deliberately
-  # SEPARATE from the install selection above: by default uninstall targets every
-  # node where Kata was actually installed (i.e. carries the
-  # katacontainers.io/kata-runtime label set by the install label stage), rather
-  # than re-evaluating the install selector. This makes uninstall robust to
-  # install-time selector drift (relabeled nodes, etc.).
+  # Node selection for the UNINSTALL (pre-delete hook) Jobs.
   #
-  # Same precedence/semantics as the install selection:
+  # IMPORTANT (Helm hook semantics): cleanup Jobs are Helm pre-delete hooks.
+  # Helm renders and STORES hook manifests at install/upgrade time and replays
+  # them verbatim at `helm uninstall` - it does NOT re-template, so any `lookup`
+  # is evaluated at install/upgrade time, never at delete time. The cleanup node
+  # set must therefore be derivable at render time.
+  #
+  # DEFAULT (all cleanup.* below left empty): MIRROR the install selection, so
+  # uninstall targets exactly the nodes install targeted. That set is frozen at
+  # the last `helm install`/`helm upgrade`, which is precisely where Kata was
+  # installed - and it is robust to later relabeling, since it reflects the
+  # install-time state rather than re-evaluating a selector at delete time.
+  #
+  # NOTE: a label-based default such as "every node with
+  # katacontainers.io/kata-runtime" CANNOT work here: that label is applied by
+  # the install Jobs, which run AFTER the cleanup hook has already been rendered
+  # and stored, so the lookup would always be empty and nothing would clean up.
+  #
+  # To OVERRIDE, set any of cleanup.nodes / cleanup.nodeSelector /
+  # cleanup.nodeSelectorExpressions; if any is set, the install mirror is
+  # disabled and these are used instead (same precedence/semantics as install):
   #   1. cleanup.nodes (explicit node names) - used verbatim.
   #   2. cleanup.nodeSelector (equality map) ANDed with
   #      cleanup.nodeSelectorExpressions (In, NotIn, Exists, DoesNotExist).
@@ -70,7 +84,7 @@ job:
   #   job:
   #     cleanup:
   #       nodes: ["worker-1"]
-  #   # Mirror the install selector instead of the kata-runtime label:
+  #   # Use an explicit selector instead of mirroring install:
   #   job:
   #     cleanup:
   #       nodeSelectorExpressions:
@@ -78,9 +92,7 @@ job:
   cleanup:
     nodes: []
     nodeSelector: {}
-    nodeSelectorExpressions:
-      - key: katacontainers.io/kata-runtime
-        operator: Exists
+    nodeSelectorExpressions: []
   # How long finished per-node install Jobs are retained before automatic
   # garbage collection (seconds). Cleanup (pre-delete hook) Jobs use the same.
   ttlSecondsAfterFinished: 600
