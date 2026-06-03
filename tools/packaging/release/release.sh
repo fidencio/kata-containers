@@ -19,6 +19,10 @@ KATA_DEPLOY_IMAGE_TAGS="${KATA_DEPLOY_IMAGE_TAGS:-}"
 IFS=' ' read -r -a IMAGE_TAGS <<< "${KATA_DEPLOY_IMAGE_TAGS}"
 KATA_DEPLOY_REGISTRIES="${KATA_DEPLOY_REGISTRIES:-}"
 IFS=' ' read -r -a REGISTRIES <<< "${KATA_DEPLOY_REGISTRIES}"
+# Registries for the separate job-mode dispatcher image. When unset, derived
+# from KATA_DEPLOY_REGISTRIES by appending "-job-dispatcher" to each entry.
+KATA_DEPLOY_JOB_DISPATCHER_REGISTRIES="${KATA_DEPLOY_JOB_DISPATCHER_REGISTRIES:-}"
+IFS=' ' read -r -a JOB_DISPATCHER_REGISTRIES <<< "${KATA_DEPLOY_JOB_DISPATCHER_REGISTRIES}"
 GH_TOKEN="${GH_TOKEN:-}"
 ARCHITECTURE="${ARCHITECTURE:-}"
 KATA_STATIC_TARBALL="${KATA_STATIC_TARBALL:-}"
@@ -146,11 +150,21 @@ function _publish_multiarch_manifest()
 	_check_required_env_var "KATA_DEPLOY_IMAGE_TAGS"
 	_check_required_env_var "KATA_DEPLOY_REGISTRIES"
 
+	# The dispatcher is shipped as a separate, minimal image alongside kata-deploy
+	# with the same tags. When no dedicated registries are given, derive them by
+	# appending "-job-dispatcher" to each kata-deploy registry.
+	if [[ ${#JOB_DISPATCHER_REGISTRIES[@]} -eq 0 ]]; then
+		JOB_DISPATCHER_REGISTRIES=()
+		for registry in "${REGISTRIES[@]}"; do
+			JOB_DISPATCHER_REGISTRIES+=("${registry}-job-dispatcher")
+		done
+	fi
+
 	# Per-arch images are built without provenance/SBOM so each tag is a single image manifest;
 	# quay.io rejects pushing multi-arch manifest lists that include attestation manifests
 	# ("manifest invalid"), so we do not enable them for this workflow.
 	# imagetools create pushes to --tag by default.
-	for registry in "${REGISTRIES[@]}"; do
+	for registry in "${REGISTRIES[@]}" "${JOB_DISPATCHER_REGISTRIES[@]}"; do
 		for tag in "${IMAGE_TAGS[@]}"; do
 			docker buildx imagetools create --tag "${registry}:${tag}" \
 				"${registry}:${tag}-amd64" \

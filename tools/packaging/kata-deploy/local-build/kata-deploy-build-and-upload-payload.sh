@@ -17,6 +17,10 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 REGISTRY="${1:-"quay.io/kata-containers/kata-deploy"}"
 TAG="${2:-}"
 ARTIFACTS_BUILD_DIR="${3:-${REPO_ROOT}/tools/packaging/kata-deploy/local-build/build}"
+# Separate, minimal image for the job-mode dispatcher (kata-deploy-job-dispatcher). Built
+# from its own staged tarball, with the same tag scheme as the kata-deploy image.
+# Defaults to "<kata-deploy registry>-job-dispatcher".
+JOB_DISPATCHER_REGISTRY="${4:-"${REGISTRY}-job-dispatcher"}"
 
 KATA_DEPLOY_DIR="${REPO_ROOT}/tools/packaging/kata-deploy"
 ARTIFACTS_STAGE_DIR="${KATA_DEPLOY_DIR}/kata-artifacts"
@@ -40,22 +44,36 @@ arch=$(uname -m)
 # Disable provenance and SBOM so each tag is a single image manifest. quay.io rejects
 # pushing multi-arch manifest lists that include attestation manifests ("manifest invalid").
 PLATFORM="linux/${arch}"
-IMAGE_TAG="${REGISTRY}:kata-containers-$(git -C "${REPO_ROOT}" rev-parse HEAD)-${arch}"
+COMMIT_TAG="kata-containers-$(git -C "${REPO_ROOT}" rev-parse HEAD)-${arch}"
+IMAGE_TAG="${REGISTRY}:${COMMIT_TAG}"
+JOB_DISPATCHER_IMAGE_TAG="${JOB_DISPATCHER_REGISTRY}:${COMMIT_TAG}"
 
 DOCKERFILE="${REPO_ROOT}/tools/packaging/kata-deploy/Dockerfile"
+JOB_DISPATCHER_DOCKERFILE="${REPO_ROOT}/tools/packaging/kata-deploy/job-dispatcher/Dockerfile"
 
-echo "Building the image"
+echo "Building the kata-deploy image"
 docker buildx build --platform "${PLATFORM}" --provenance false --sbom false \
 	-f "${DOCKERFILE}" \
 	--tag "${IMAGE_TAG}" --push .
 
+echo "Building the kata-deploy-job-dispatcher image"
+docker buildx build --platform "${PLATFORM}" --provenance false --sbom false \
+	-f "${JOB_DISPATCHER_DOCKERFILE}" \
+	--tag "${JOB_DISPATCHER_IMAGE_TAG}" --push .
+
 if [[ -n "${TAG}" ]]; then
 	ADDITIONAL_TAG="${REGISTRY}:${TAG}"
+	JOB_DISPATCHER_ADDITIONAL_TAG="${JOB_DISPATCHER_REGISTRY}:${TAG}"
 
 	echo "Building the ${ADDITIONAL_TAG} image"
 	docker buildx build --platform "${PLATFORM}" --provenance false --sbom false \
 		-f "${DOCKERFILE}" \
 		--tag "${ADDITIONAL_TAG}" --push .
+
+	echo "Building the ${JOB_DISPATCHER_ADDITIONAL_TAG} image"
+	docker buildx build --platform "${PLATFORM}" --provenance false --sbom false \
+		-f "${JOB_DISPATCHER_DOCKERFILE}" \
+		--tag "${JOB_DISPATCHER_ADDITIONAL_TAG}" --push .
 fi
 
 popd
