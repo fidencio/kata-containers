@@ -658,6 +658,88 @@ them instead of mirroring install. Returns a space-separated list of node names.
 {{- end -}}
 
 {{/*
+Number of nodes selected for the INSTALL / CLEANUP Indexed Jobs. Used as the
+Job's `completions` (one pod per selected node). Counts the names returned by
+the corresponding selector helper; emits 0 when none match (e.g. during
+`helm template`, where `lookup` is empty).
+*/}}
+{{- define "kata-deploy.jobNodeCount" -}}
+{{- $names := include "kata-deploy.jobNodeNames" . | trim -}}
+{{- if $names -}}{{- len (splitList " " $names) -}}{{- else -}}0{{- end -}}
+{{- end -}}
+{{- define "kata-deploy.cleanupNodeCount" -}}
+{{- $names := include "kata-deploy.cleanupNodeNames" . | trim -}}
+{{- if $names -}}{{- len (splitList " " $names) -}}{{- else -}}0{{- end -}}
+{{- end -}}
+
+{{/*
+Pod scheduling block for the staged Indexed Jobs (deploymentMode: job).
+
+Emits nodeSelector / nodeAffinity that restrict pods to the SAME node set the
+selector helpers count, plus a topologySpreadConstraint that forces at most one
+pod per node (kubernetes.io/hostname). Combined with completions == node count,
+this lands exactly one staged pod on each selected node, in parallel.
+
+Arguments (dict):
+  root  - top-level context (.)
+  nodes - explicit node-name list (used verbatim if non-empty)
+  eq    - equality label selector map (-> nodeSelector)
+  exprs - list of {key, operator, values} requirements (-> nodeAffinity)
+  stage - "install" | "cleanup" (matches the pod label used for spreading)
+
+Emitted at column 0; indent with `nindent` at the call site (pod spec level).
+*/}}
+{{- define "kata-deploy.jobScheduling" -}}
+{{- $nodes := .nodes | default list -}}
+{{- $eq := .eq | default dict -}}
+{{- $exprs := .exprs | default list -}}
+{{- if gt (len $nodes) 0 }}
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+{{- range $nodes }}
+        - matchFields:
+            - key: metadata.name
+              operator: In
+              values: [{{ . | quote }}]
+{{- end }}
+{{- else }}
+{{- if gt (len $eq) 0 }}
+nodeSelector:
+{{- range $k, $v := $eq }}
+  {{ $k }}: {{ $v | quote }}
+{{- end }}
+{{- end }}
+{{- if gt (len $exprs) 0 }}
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+{{- range $exprs }}
+            - key: {{ .key }}
+              operator: {{ .operator }}
+{{- if .values }}
+              values:
+{{- range .values }}
+                - {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        kata-deploy/stage: {{ .stage | quote }}
+        app.kubernetes.io/instance: {{ .root.Release.Name | quote }}
+{{- end -}}
+
+{{/*
 Evaluate whether a node's labels satisfy the job selector. Arguments (dict):
   labels - the node's labels map
   eq     - equality selector map (every key=value must match)

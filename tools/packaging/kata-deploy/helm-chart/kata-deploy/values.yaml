@@ -1,15 +1,24 @@
 # Deployment model for installing/cleaning up Kata on nodes.
 #   daemonset: (default) the long-running kata-deploy DaemonSet installs Kata on
 #              every matching node and reverts it on pod termination (uninstall).
-#   job:       a short-lived, staged per-node install Job (one per node) runs the
-#              install pipeline as ordered initContainers and exits. Cleanup runs
-#              as a per-node pre-delete hook Job. There is no always-on component.
+#   job:       a short-lived, staged install runs as a SINGLE Indexed Job whose
+#              pods fan out one-per-node (in parallel, capped by job.parallelism),
+#              run the install pipeline as ordered initContainers, and exit.
+#              Cleanup runs as a single Indexed pre-delete hook Job the same way.
+#              There is no always-on component.
 #
 # NOTE on "job" mode and new nodes:
-#   The set of per-node Jobs is computed at `helm install`/`helm upgrade` time by
-#   enumerating the cluster's nodes. When you add nodes later, re-run
-#   `helm upgrade` to create install Jobs for the new nodes. This is intentional:
-#   it avoids running an always-on privileged component on every node.
+#   The Indexed Job's completion count (one pod per selected node) is computed at
+#   `helm install`/`helm upgrade` time by enumerating the cluster's nodes. When
+#   you add nodes later, re-run `helm upgrade` so the Job covers the new nodes.
+#   The staged actions are idempotent, so already-installed nodes are skipped.
+#   This is intentional: it avoids an always-on privileged component on every node.
+#
+# Why a single Indexed Job instead of one Job per node: Helm stores the whole
+# rendered release in one Secret (hard ~1 MiB etcd cap) and runs hook resources
+# strictly sequentially. One Job per node hits both walls on large fleets
+# (~thousands of nodes); a single Indexed Job is one object whose pods run in
+# parallel, so it scales to large clusters.
 deploymentMode: daemonset  # daemonset | job
 
 # Settings specific to deploymentMode: job
@@ -93,11 +102,18 @@ job:
     nodes: []
     nodeSelector: {}
     nodeSelectorExpressions: []
-  # How long finished per-node install Jobs are retained before automatic
-  # garbage collection (seconds). Cleanup (pre-delete hook) Jobs use the same.
+  # How long the finished install/cleanup Job is retained before automatic
+  # garbage collection (seconds).
   ttlSecondsAfterFinished: 600
-  # Number of retries for a failed per-node Job before it is marked failed.
+  # Per-index retry budget. job mode runs a single Indexed Job whose pods fan
+  # out one-per-node; backoffLimit here is applied as backoffLimitPerIndex, so a
+  # failure on one node retries only that node and never aborts the others.
   backoffLimit: 3
+  # Maximum number of nodes processed concurrently by the single Indexed Job
+  # (the Job's parallelism). The effective value is capped at the number of
+  # selected nodes. Lower it to pace the rollout, e.g. to limit how many CRI
+  # runtimes restart at once on a large fleet; raise it to install faster.
+  parallelism: 100
 
 imagePullPolicy: Always
 

@@ -1,23 +1,27 @@
 {{- /*
-Per-node staged cleanup Jobs (deploymentMode: job).
+Staged cleanup as a single Indexed Job (deploymentMode: job, pre-delete hook).
 
-The mirror image of the install Jobs: one Job is emitted per targeted node
-(see kata-deploy.cleanupNodeNames) and runs the install pipeline in reverse,
-then exits:
+The mirror image of the install Job: ONE Indexed Job whose pods fan out across
+the selected nodes - one pod per node (hostname topology spread), `completions`
+== number of selected nodes, up to `job.parallelism` concurrent. Each pod runs
+the install pipeline in reverse against its OWN host and exits:
 
   unlabel -> revert-cri   (initContainers, run sequentially)
   remove-artifacts        (main container)
 
-These are Helm pre-delete hooks: on `helm uninstall` they run while the
-release's resources (notably the kept ServiceAccount/RBAC) still exist, undo
-the host changes, and complete before the resources are torn down. The kept
-RBAC is removed afterwards by the post-delete rb-cleanup Job.
+Each pod learns its node from the downward API (NODE_NAME = spec.nodeName).
 
-Node selection note: because Helm renders and stores hook manifests at
-install/upgrade time (and replays them verbatim at uninstall, with no
-re-templating), the cleanup node set is frozen at the last install/upgrade.
-By default it mirrors the install selection (see kata-deploy.cleanupNodeNames),
-so uninstall targets exactly the nodes install targeted.
+This is a Helm pre-delete hook: on `helm uninstall` it runs while the release's
+kept ServiceAccount/RBAC still exist, undoes the host changes, and completes
+before those are torn down. The post-delete rb-cleanup Job removes the RBAC
+afterwards.
+
+Node selection note: Helm renders and stores hook manifests at install/upgrade
+time and replays them verbatim at uninstall (no re-templating), so both the
+completion count and the scheduling selectors are frozen at the last
+install/upgrade. By default they mirror the install selection (see
+kata-deploy.cleanupNodeNames), so uninstall targets exactly the nodes install
+targeted.
 
 Ordering rationale (reverse of install):
   - unlabel first  : stop the scheduler from placing kata workloads here
@@ -37,26 +41,39 @@ installed) is safe and cheap.
 {{- $base = printf "%s-%s" .Chart.Name .Values.env.multiInstallSuffix }}
 {{- end }}
 {{- $sa := include "kata-deploy.serviceAccountName" . }}
-{{- $names := include "kata-deploy.cleanupNodeNames" . | trim }}
-{{- if $names }}
-{{- range $node := (splitList " " $names) }}
+{{- $count := include "kata-deploy.cleanupNodeCount" . | int }}
+{{- if gt $count 0 }}
+{{- $parallelism := min (int $root.Values.job.parallelism) $count }}
+{{- /* Resolve the effective cleanup selection (mirror install unless overridden). */ -}}
+{{- $cleanup := $root.Values.job.cleanup | default dict }}
+{{- $cNodes := $cleanup.nodes | default list }}
+{{- $cEq := $cleanup.nodeSelector | default dict }}
+{{- $cExprs := $cleanup.nodeSelectorExpressions | default list }}
+{{- if and (eq (len $cNodes) 0) (eq (len $cEq) 0) (eq (len $cExprs) 0) }}
+{{- $cNodes = $root.Values.job.nodes }}
+{{- $cEq = ($root.Values.job.nodeSelector | default dict) }}
+{{- $cExprs = ($root.Values.job.nodeSelectorExpressions | default list) }}
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ printf "%s-cleanup-%s" $base $node | trunc 63 | trimSuffix "-" }}
+  name: {{ printf "%s-cleanup" $base | trunc 63 | trimSuffix "-" }}
   namespace: {{ $root.Release.Namespace }}
   labels:
     app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
     app.kubernetes.io/instance: {{ $root.Release.Name }}
     kata-deploy/stage: cleanup
-    kata-deploy/node: {{ $node | quote }}
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
-  backoffLimit: {{ $root.Values.job.backoffLimit }}
+  completionMode: Indexed
+  completions: {{ $count }}
+  parallelism: {{ $parallelism }}
+  backoffLimitPerIndex: {{ $root.Values.job.backoffLimit }}
+  maxFailedIndexes: {{ $count }}
   ttlSecondsAfterFinished: {{ $root.Values.job.ttlSecondsAfterFinished }}
   template:
     metadata:
@@ -64,7 +81,6 @@ spec:
         app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
         app.kubernetes.io/instance: {{ $root.Release.Name }}
         kata-deploy/stage: cleanup
-        kata-deploy/node: {{ $node | quote }}
     spec:
 {{- with $root.Values.imagePullSecrets }}
       imagePullSecrets:
@@ -72,7 +88,6 @@ spec:
 {{- end }}
       serviceAccountName: {{ $sa }}
       restartPolicy: Never
-      nodeName: {{ $node | quote }}
       hostPID: true
 {{- with $root.Values.tolerations }}
       tolerations:
@@ -81,6 +96,7 @@ spec:
 {{- with $root.Values.priorityClassName }}
       priorityClassName: {{ . | quote }}
 {{- end }}
+{{- include "kata-deploy.jobScheduling" (dict "root" $root "nodes" $cNodes "eq" $cEq "exprs" $cExprs "stage" "cleanup") | nindent 6 }}
       initContainers:
 {{- include "kata-deploy.stageContainer" (dict "root" $root "name" "unlabel" "action" "cleanup-stage-unlabel" "privileged" false "mountHost" false) | nindent 6 }}
 {{- include "kata-deploy.stageContainer" (dict "root" $root "name" "revert-cri" "action" "cleanup-stage-revert-cri" "privileged" true "mountHost" true) | nindent 6 }}
@@ -88,6 +104,5 @@ spec:
 {{- include "kata-deploy.stageContainer" (dict "root" $root "name" "remove-artifacts" "action" "cleanup-stage-remove-artifacts" "privileged" true "mountHost" true) | nindent 6 }}
       volumes:
 {{- include "kata-deploy.commonVolumes" $root | nindent 6 }}
-{{- end }}
 {{- end }}
 {{- end }}
