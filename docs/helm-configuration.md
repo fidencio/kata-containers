@@ -259,6 +259,92 @@ See the default [`values.yaml`](#parameters) for the remaining `job.*` options
 (e.g. `dispatcherImage`, `parallelism`, `ttlSecondsAfterFinished`,
 `backoffLimit`).
 
+## Installing prerequisite charts with helmfile (`dependencies`)
+
+Some setups need cluster-scoped operators in place **before** kata-deploy runs —
+for example the NVIDIA GPU operator, or SR-IOV / network operators. Helm cannot
+install arbitrary external charts in a guaranteed order relative to this
+chart's own workloads, so the chart can optionally run [helmfile][helmfile] as a
+bootstrap step.
+
+When `dependencies.enabled=true`, the chart renders a small Job that runs
+`helmfile <command>` against a `helmfile.yaml` you supply, and wires it into the
+release so the ordering is guaranteed:
+
+```text
+normal resources (RBAC, NFD subchart, job-templates ConfigMap, ...)
+  -> helmfile bootstrap Job   (post-install/post-upgrade hook, weight 0)
+  -> dispatcher install Job   (post-install/post-upgrade hook, weight 5)   [job mode]
+  -> verification             (higher weight)
+```
+
+Helm blocks on each hook before starting the next, so the dependency charts are
+fully converged before the dispatcher fans out the per-node install Jobs. Because
+`helmfile sync`/`apply` is idempotent, re-running `helm upgrade` simply
+re-converges them.
+
+This is deliberately **separate** from the chart's `Chart.yaml` `dependencies:`
+block (subcharts such as `node-feature-discovery`, which Helm keeps managing
+itself). Use `helmfile` for the external, ordered, optional prerequisites; keep
+subcharts for what ships with the chart.
+
+```yaml
+dependencies:
+  enabled: true
+  # helmfile's own `needs:` expresses ordering BETWEEN the releases below.
+  helmfile: |
+    repositories:
+      - name: nvidia
+        url: https://nvidia.github.io/gpu-operator
+    helmDefaults:
+      wait: true
+      timeout: 600
+    releases:
+      - name: gpu-operator
+        namespace: gpu-operator
+        createNamespace: true
+        chart: nvidia/gpu-operator
+        version: v24.9.0
+```
+
+Things to know:
+
+- **Privilege.** The bootstrap Job is bound to `cluster-admin` (it installs
+  arbitrary charts, CRDs and cluster-scoped operators, which cannot be reduced to
+  a fixed least-privilege role). It uses its own dedicated `ServiceAccount`,
+  separate from both `kata-deploy-sa` and the unprivileged dispatcher identity.
+  It is **disabled by default**; enable it only when you need it.
+- **`sync` vs `apply`.** `dependencies.command` defaults to `sync`
+  (`helm upgrade --install` per release). Set it to `apply` to diff first and
+  skip no-op releases; both work with the default upstream image, which bundles
+  the `helm-diff` plugin.
+- **Teardown.** By default (`dependencies.destroyOnUninstall=true`) the
+  dependency releases are removed on `helm uninstall` via a `helmfile destroy`
+  `pre-delete` hook that runs *after* the cleanup dispatcher has removed kata
+  from the nodes, so uninstall is symmetric with install. Set it to `false` if
+  the prerequisite operators are shared with other workloads and must outlive
+  kata-deploy.
+- **Image.** `dependencies.image` defaults to the upstream
+  `ghcr.io/helmfile/helmfile` image (pin the tag). It already includes `helm`,
+  `kubectl` and `helm-diff`.
+- **Placement.** The bootstrap Job is a pure API client (it only runs
+  `helmfile`), so where its pod lands has no effect on where the dependency
+  charts place their workloads — that is controlled by each dependency chart's
+  own `nodeSelector`/affinity in your `helmfile.yaml` (e.g. point the GPU
+  operator at your kata GPU nodes there). `dependencies.nodeSelector` /
+  `dependencies.tolerations` only control the helmfile Job pod itself, and
+  default to "schedulable anywhere, including a single tainted control-plane".
+- **Ordering vs NFD.** The bootstrap runs *after* the chart's normal resources,
+  so the bundled `node-feature-discovery` subchart is created before it. If a
+  dependency chart itself needs NFD to be fully Ready first, gate it with
+  `helmDefaults.wait`/`needs` or manage NFD from the helmfile too.
+
+See the default [`values.yaml`](#parameters) for all `dependencies.*` options
+(`extraFiles`, `extraArgs`, `nodeSelector`, `tolerations`,
+`ttlSecondsAfterFinished`).
+
+[helmfile]: https://github.com/helmfile/helmfile
+
 ## Examples
 
 We provide a few examples that you can pass to helm via the `-f`/`--values` flag.

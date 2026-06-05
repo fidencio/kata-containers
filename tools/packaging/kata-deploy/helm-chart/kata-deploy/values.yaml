@@ -101,6 +101,79 @@ job:
   # failed. One node failing never aborts the others.
   backoffLimit: 3
 
+# Cluster-scoped prerequisite charts installed via helmfile BEFORE kata-deploy
+# proceeds (i.e. before the job-mode dispatcher's per-node install Jobs, and
+# before the verification hook). Use this to converge operators that kata
+# depends on - e.g. the NVIDIA GPU operator, SR-IOV / network operators - in a
+# guaranteed order, using helmfile's own `needs:` for inter-release ordering.
+#
+# This is intentionally SEPARATE from the chart's Chart.yaml `dependencies:`
+# (subcharts such as node-feature-discovery, which Helm keeps managing itself).
+# It is a privileged, opt-in bootstrapper: the Job is bound to cluster-admin so
+# it can install arbitrary charts. Leave it disabled unless you need it.
+dependencies:
+  # Master switch. When false NONE of the helmfile resources below are rendered
+  # and kata-deploy behaves exactly as before.
+  enabled: false
+  # Image providing the helmfile + helm + kubectl CLIs. The upstream helmfile
+  # image already bundles helm, kubectl and the helm-diff plugin, so both the
+  # "sync" and "apply" commands work out of the box. Pin a specific tag.
+  image:
+    reference: ghcr.io/helmfile/helmfile
+    tag: "v1.5.2"
+  imagePullPolicy: IfNotPresent
+  # helmfile subcommand run on install/upgrade:
+  #   sync  - `helm upgrade --install` every release (no diff; simplest).
+  #   apply - diff first and skip no-op releases (needs helm-diff, which the
+  #           upstream image ships).
+  command: sync
+  # Run `helmfile destroy` on `helm uninstall` to remove the dependency releases.
+  # ON by default, so uninstall is symmetric with install (what kata-deploy
+  # brought up, it tears down). Set to false if the prerequisite operators are
+  # shared with other workloads and must outlive kata-deploy.
+  destroyOnUninstall: true
+  # The helmfile.yaml content - the single source of truth for which charts to
+  # install and in which order. Mounted at /etc/helmfile/helmfile.yaml. REQUIRED
+  # when enabled. Example:
+  #   helmfile: |
+  #     repositories:
+  #       - name: nvidia
+  #         url: https://nvidia.github.io/gpu-operator
+  #     helmDefaults:
+  #       wait: true
+  #       timeout: 600
+  #     releases:
+  #       - name: gpu-operator
+  #         namespace: gpu-operator
+  #         createNamespace: true
+  #         chart: nvidia/gpu-operator
+  #         version: v24.9.0
+  helmfile: ""
+  # Optional extra files (values files, .gotmpl, etc.) referenced by the helmfile
+  # above. Map of filename -> content; each is mounted next to the helmfile at
+  # /etc/helmfile/<filename>.
+  extraFiles: {}
+  # Extra args appended to the helmfile invocation (e.g. ["--environment", "prod"]).
+  extraArgs: []
+  # Scheduling for the bootstrap Job. This Job is a pure Kubernetes API client
+  # (it only runs `helmfile`, i.e. talks to the apiserver); WHERE its single pod
+  # lands has NO bearing on where the dependency charts place their workloads -
+  # that is decided by each dependency chart's own nodeSelector/affinity in your
+  # helmfile (e.g. the GPU operator targeting GPU nodes via NFD labels). So the
+  # defaults below only make the Job schedulable anywhere, including single-node
+  # / CI clusters whose only node is a tainted control-plane; they do NOT try to
+  # co-locate it with kata-deploy.
+  nodeSelector: {}
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+  # How long the finished helmfile Job is retained before garbage collection (s).
+  ttlSecondsAfterFinished: 600
+
 imagePullPolicy: Always
 
 imagePullSecrets: []

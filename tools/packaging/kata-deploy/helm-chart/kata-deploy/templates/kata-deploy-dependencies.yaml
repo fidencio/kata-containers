@@ -1,0 +1,222 @@
+{{- /*
+helmfile dependency bootstrap (dependencies.enabled).
+
+Converges a user-supplied set of cluster-scoped prerequisite charts (e.g. the
+GPU operator, SR-IOV / network operators) via `helmfile` BEFORE kata-deploy
+proceeds, with guaranteed ordering relative to the rest of the release:
+
+  normal resources (RBAC, NFD subchart, job-templates ConfigMap, ...)
+    -> helmfile bootstrap Job   (post-install/post-upgrade hook, weight 0)
+    -> dispatcher install Job    (post-install/post-upgrade hook, weight 5)
+    -> verification              (higher weight)
+
+Helm blocks on each hook before the next, so the bootstrap is guaranteed to
+finish before the dispatcher fans out the per-node install Jobs. `helmfile sync`
+(or `apply`) is idempotent, so re-running `helm upgrade` re-converges the deps.
+
+This is deliberately separate from the chart's Chart.yaml `dependencies:` block
+(subcharts such as node-feature-discovery), which Helm still manages itself.
+
+The ServiceAccount/RBAC and the helmfile ConfigMap are plain (non-hook)
+resources, mirroring the dispatcher: Helm creates them before the post-install
+hook runs and keeps them through the pre-delete destroy hook.
+*/ -}}
+{{- if .Values.dependencies.enabled }}
+{{- $root := . }}
+{{- $deps := .Values.dependencies }}
+{{- if not ($deps.helmfile | trim) }}
+{{- fail "dependencies.enabled is true but dependencies.helmfile is empty: provide the helmfile.yaml content listing the charts to install" }}
+{{- end }}
+{{- $base := .Chart.Name }}
+{{- if .Values.env.multiInstallSuffix }}
+{{- $base = printf "%s-%s" .Chart.Name .Values.env.multiInstallSuffix }}
+{{- end }}
+{{- $sa := include "kata-deploy.dependenciesServiceAccountName" . }}
+{{- $cmName := printf "%s-helmfile" $base | trunc 63 | trimSuffix "-" }}
+---
+# helmfile configuration mounted into the bootstrap/destroy Jobs. Plain resource
+# so it exists for both the post-install bootstrap and the pre-delete destroy.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $cmName }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    kata-deploy/component: dependencies
+data:
+  helmfile.yaml: |
+{{ $deps.helmfile | indent 4 }}
+{{- range $name, $content := ($deps.extraFiles | default dict) }}
+  {{ $name }}: |
+{{ $content | indent 4 }}
+{{- end }}
+---
+# Dedicated identity for the bootstrap. It is bound to cluster-admin because
+# helmfile installs arbitrary prerequisite charts (CRDs, cluster-scoped
+# operators), which cannot be expressed as a fixed least-privilege role.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    kata-deploy/component: dependencies
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Chart.Name }}-deps-crb{{ with .Values.env.multiInstallSuffix }}-{{ . }}{{ end }}
+  labels:
+    app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    kata-deploy/component: dependencies
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: {{ $sa }}
+  namespace: {{ $root.Release.Namespace }}
+---
+# Bootstrap Job: runs `helmfile <command>` to converge the prerequisite charts.
+# post-install/post-upgrade at weight 0 -> before the dispatcher (weight 5).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-deps-install" $base | trunc 63 | trimSuffix "-" }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    kata-deploy/component: dependencies
+    kata-deploy/dependencies: install
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: {{ $deps.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+        app.kubernetes.io/instance: {{ $root.Release.Name }}
+        kata-deploy/dependencies: install
+    spec:
+{{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+      serviceAccountName: {{ $sa }}
+      restartPolicy: Never
+{{- with $deps.nodeSelector }}
+      nodeSelector:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+{{- with $deps.tolerations }}
+      tolerations:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+{{- with $root.Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+{{- end }}
+      containers:
+        - name: helmfile
+          image: {{ include "kata-deploy.dependenciesImage" $root }}
+          imagePullPolicy: {{ $deps.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+          command:
+            - helmfile
+            - --file
+            - /etc/helmfile/helmfile.yaml
+            - {{ $deps.command }}
+{{- range $arg := ($deps.extraArgs | default list) }}
+            - {{ $arg | quote }}
+{{- end }}
+          volumeMounts:
+            - name: helmfile-config
+              mountPath: /etc/helmfile
+              readOnly: true
+      volumes:
+        - name: helmfile-config
+          configMap:
+            name: {{ $cmName }}
+{{- if $deps.destroyOnUninstall }}
+---
+# Teardown Job: `helmfile destroy` on uninstall. pre-delete at weight 10, i.e.
+# AFTER the cleanup dispatcher (weight 5) has removed kata from the nodes. Runs
+# while the release's kept ServiceAccount/RBAC and the helmfile ConfigMap still
+# exist (release resources are torn down only after pre-delete hooks complete).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-deps-destroy" $base | trunc 63 | trimSuffix "-" }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    kata-deploy/component: dependencies
+    kata-deploy/dependencies: destroy
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: {{ $deps.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "kata-deploy.name" $root }}
+        app.kubernetes.io/instance: {{ $root.Release.Name }}
+        kata-deploy/dependencies: destroy
+    spec:
+{{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+      serviceAccountName: {{ $sa }}
+      restartPolicy: Never
+{{- with $deps.nodeSelector }}
+      nodeSelector:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+{{- with $deps.tolerations }}
+      tolerations:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+{{- with $root.Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+{{- end }}
+      containers:
+        - name: helmfile
+          image: {{ include "kata-deploy.dependenciesImage" $root }}
+          imagePullPolicy: {{ $deps.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+          command:
+            - helmfile
+            - --file
+            - /etc/helmfile/helmfile.yaml
+            - destroy
+          volumeMounts:
+            - name: helmfile-config
+              mountPath: /etc/helmfile
+              readOnly: true
+      volumes:
+        - name: helmfile-config
+          configMap:
+            name: {{ $cmName }}
+{{- end }}
+{{- end }}

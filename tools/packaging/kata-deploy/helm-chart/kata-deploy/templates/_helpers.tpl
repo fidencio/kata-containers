@@ -391,6 +391,35 @@ defaults to Chart.AppVersion.
 {{- end -}}
 
 {{/*
+Image for the helmfile dependency bootstrap Job (helmfile + helm + kubectl).
+Supports tag (reference:tag) and digest (reference@sha256:...) formats. Unlike
+the kata images, the tag does NOT default to Chart.AppVersion (this is an
+external tool image), so an empty tag falls back to the reference as-is.
+*/}}
+{{- define "kata-deploy.dependenciesImage" -}}
+{{- $ref := .Values.dependencies.image.reference -}}
+{{- $tag := .Values.dependencies.image.tag | toString -}}
+{{- if or (contains "@" $ref) (eq $tag "") -}}
+{{- $ref -}}
+{{- else -}}
+{{- printf "%s:%s" $ref $tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+ServiceAccount name for the helmfile dependency bootstrap (honoring
+multiInstallSuffix). It is bound to cluster-admin so helmfile can install
+arbitrary prerequisite charts; keep it separate from every other identity.
+*/}}
+{{- define "kata-deploy.dependenciesServiceAccountName" -}}
+{{- if .Values.env.multiInstallSuffix -}}
+{{ .Chart.Name }}-deps-sa-{{ .Values.env.multiInstallSuffix }}
+{{- else -}}
+{{ .Chart.Name }}-deps-sa
+{{- end -}}
+{{- end -}}
+
+{{/*
 Get snapshotter setup list from structured config
 */}}
 {{- define "kata-deploy.getSnapshotterSetup" -}}
