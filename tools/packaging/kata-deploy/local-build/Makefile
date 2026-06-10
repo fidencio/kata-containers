@@ -106,6 +106,7 @@ NVGPU_BASE_TARBALLS = \
 	agent-tarball \
 	busybox-tarball \
 	coco-guest-components-tarball \
+	nvrc-tarball \
 	$(PUBLISH_COMPONENT_TARBALLS) \
 	kernel-nvidia-gpu-tarball \
 	ovmf-sev-tarball \
@@ -123,6 +124,7 @@ NVGPU_BASE_TARBALLS = \
 	agent-tarball \
 	busybox-tarball \
 	coco-guest-components-tarball \
+	nvrc-tarball \
 	$(PUBLISH_COMPONENT_TARBALLS) \
 	kernel-nvidia-gpu-tarball \
 	ovmf-tarball \
@@ -248,6 +250,9 @@ busybox-tarball:
 coco-guest-components-tarball:
 	${MAKE} $@-build
 
+nvrc-tarball:
+	${MAKE} $@-build
+
 cloud-hypervisor-tarball:
 	${MAKE} $@-build
 
@@ -358,11 +363,11 @@ DEPS := agent-tarball
 rootfs-initrd-tarball: $(DEPS)
 	${MAKE} $@-build
 
-DEPS := agent-tarball busybox-tarball kernel-nvidia-gpu-tarball
+DEPS := agent-tarball busybox-tarball nvrc-tarball kernel-nvidia-gpu-tarball
 rootfs-image-nvidia-gpu-tarball: $(DEPS)
 	${MAKE} $@-build
 
-DEPS := agent-tarball busybox-tarball pause-image-tarball coco-guest-components-tarball kernel-nvidia-gpu-tarball
+DEPS := agent-tarball busybox-tarball nvrc-tarball pause-image-tarball coco-guest-components-tarball kernel-nvidia-gpu-tarball
 rootfs-image-nvidia-gpu-confidential-tarball: $(DEPS)
 	${MAKE} $@-build
 

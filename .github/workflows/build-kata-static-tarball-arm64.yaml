@@ -53,6 +53,7 @@ jobs:
           - kernel-debug
           - kernel-dragonball-experimental
           - kernel-nvidia-gpu
+          - nvrc
           - nydus
           - openvmm
           - ovmf
@@ -282,6 +283,7 @@ jobs:
           - coco-guest-components
           - pause-image
           - kernel-nvidia-gpu-modules
+          - nvrc
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-arm-${{ toJSON(matrix) }}
       cancel-in-progress: true

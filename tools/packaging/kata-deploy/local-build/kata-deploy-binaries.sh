@@ -29,6 +29,7 @@ readonly versions_yaml="${repo_root_dir}/versions.yaml"
 
 readonly busybox_builder="${static_build_dir}/busybox/build.sh"
 readonly agent_builder="${static_build_dir}/agent/build.sh"
+readonly nvrc_builder="${static_build_dir}/nvrc/build.sh"
 readonly clh_builder="${static_build_dir}/cloud-hypervisor/build-static-clh.sh"
 readonly openvmm_builder="${static_build_dir}/openvmm/build.sh"
 readonly firecracker_builder="${static_build_dir}/firecracker/build-static-firecracker.sh"
@@ -623,7 +624,21 @@ get_latest_nvidia_ctk_version() {
 }
 
 get_latest_nvidia_nvrc_version() {
-	get_from_kata_deps ".externals.nvrc.version"
+	# NVRC is built from source at a pinned git ref, so the cache key tracks
+	# the ref and toolchain (not just the release version) to invalidate the
+	# dependent images whenever any of them change.
+	local version ref toolchain
+	version="$(get_from_kata_deps ".externals.nvrc.version")"
+	ref="$(get_from_kata_deps ".externals.nvrc.ref")"
+	toolchain="$(get_from_kata_deps ".externals.nvrc.toolchain")"
+	echo "${version}-${ref}-${toolchain}"
+}
+
+get_nvrc_tarball_path() {
+	nvrc_local_build_dir="${repo_root_dir}/tools/packaging/kata-deploy/local-build/build"
+	nvrc_tarball_name="kata-static-nvrc.tar.zst"
+
+	echo "${nvrc_local_build_dir}/${nvrc_tarball_name}"
 }
 
 get_latest_nvidia_nvat_version() {
@@ -1766,6 +1781,23 @@ install_coco_guest_components() {
 	install_coco_guest_components_from_oci
 }
 
+install_nvrc() {
+	latest_artefact="$(get_latest_nvidia_nvrc_version)"
+	artefact_tag="$(get_from_kata_deps ".externals.nvrc.version")"
+	latest_builder_image="$(get_nvrc_image_name)"
+
+	install_cached_tarball_component \
+		"${build_target}" \
+		"${latest_artefact}" \
+		"${latest_builder_image}" \
+		"${final_tarball_name}" \
+		"${final_tarball_path}" \
+		&& return 0
+
+	info "build static nvrc"
+	DESTDIR="${destdir}" "${nvrc_builder}"
+}
+
 install_pause_image() {
 	latest_artefact="$(get_from_kata_deps ".externals.pause.repo")-$(get_from_kata_deps ".externals.pause.version")"
 	artefact_tag=${latest_artefact}
@@ -1981,6 +2013,8 @@ handle_build() {
 	boot-image-se-runtime-rs) install_se_image_runtime_rs ;;
 
 	coco-guest-components) install_coco_guest_components ;;
+
+	nvrc) install_nvrc ;;
 
 	cloud-hypervisor) install_clh ;;
 
