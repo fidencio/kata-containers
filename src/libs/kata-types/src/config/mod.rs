@@ -340,6 +340,30 @@ impl TomlConfig {
         Ok(kv)
     }
 
+    /// Add parameters derived from the active agent configuration to the active
+    /// hypervisor's kernel command line.
+    ///
+    /// Agent parameters are prepended so explicitly configured hypervisor
+    /// parameters retain precedence.
+    pub fn add_agent_kernel_params(&mut self) {
+        let params = self
+            .get_agent_kernel_params()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(key, value)| {
+                if value.is_empty() {
+                    key
+                } else {
+                    format!("{key}={value}")
+                }
+            })
+            .collect();
+
+        if let Some(hypervisor) = self.hypervisor.get_mut(&self.runtime.hypervisor_name) {
+            hypervisor.boot_info.add_kernel_params(params);
+        }
+    }
+
     /// Probe configuration file according to the default configuration file list.
     pub fn get_default_config_file() -> Result<PathBuf> {
         for f in default::DEFAULT_RUNTIME_CONFIGURATIONS.iter() {
