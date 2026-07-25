@@ -445,6 +445,7 @@ jobs:
           - agent-ctl
           - genpolicy
           - kata-ctl
+          - kata-kernel-whisperer
           - kata-manager
           - trace-forwarder
         stage:

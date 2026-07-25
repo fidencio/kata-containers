@@ -134,6 +134,7 @@ options:
 	firecracker
 	genpolicy
 	kata-ctl
+	kata-kernel-whisperer
 	kata-manager
 	kernel
 	kernel-debug
@@ -1695,6 +1696,10 @@ install_kata_ctl() {
 	install_tools_helper "kata-ctl"
 }
 
+install_kata_kernel_whisperer() {
+	install_tools_helper "kata-kernel-whisperer"
+}
+
 install_kata_manager() {
 	install_script_helper "kata-manager.sh"
 }
@@ -1734,6 +1739,7 @@ handle_build() {
 		install_initrd
 		install_initrd_confidential
 		install_kata_ctl
+		install_kata_kernel_whisperer
 		install_kata_manager
 		install_kernel
 		install_kernel_dragonball_experimental
@@ -1769,6 +1775,8 @@ handle_build() {
 	genpolicy) install_genpolicy ;;
 
 	kata-ctl) install_kata_ctl ;;
+
+	kata-kernel-whisperer) install_kata_kernel_whisperer ;;
 
 	kata-manager) install_kata_manager ;;
 
@@ -1985,6 +1993,7 @@ main() {
 		firecracker
 		genpolicy
 		kata-ctl
+		kata-kernel-whisperer
 		kata-manager
 		kernel
 		kernel-experimental

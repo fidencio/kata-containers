@@ -3764,6 +3764,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kata-kernel-whisperer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hypervisor",
+ "kata-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "kata-sys-util"
 version = "0.1.0"
 dependencies = [

@@ -380,6 +380,7 @@ jobs:
         asset:
           - genpolicy
           - kata-ctl
+          - kata-kernel-whisperer
         stage:
           - ${{ inputs.stage }}
     steps:

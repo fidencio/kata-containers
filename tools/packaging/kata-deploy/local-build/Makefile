@@ -200,6 +200,9 @@ pause-image-tarball:
 kata-ctl-tarball: copy-scripts-for-the-tools-build
 	${MAKE} $@-build
 
+kata-kernel-whisperer-tarball: copy-scripts-for-the-tools-build
+	${MAKE} $@-build
+
 kata-manager-tarball:
 	${MAKE} $@-build
 
