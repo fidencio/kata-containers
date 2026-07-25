@@ -4,6 +4,10 @@
 //
 
 use crate::device::topology::{TopologyPortDevice, DEFAULT_PCIE_ROOT_BUS};
+use crate::guest_cmdline::{
+    add_qemu_console_kernel_params, add_qemu_iommu_kernel_params, build_qemu_kernel_params,
+    remove_qemu_secure_execution_kernel_params,
+};
 use crate::qemu::qmp::get_qmp_socket_path;
 use crate::utils::{
     chown_to_parent, clear_cloexec, create_vhost_net_fds, open_named_tuntap, uses_native_ccw_bus,
@@ -181,50 +185,10 @@ struct Kernel {
 
 impl Kernel {
     fn new(config: &HypervisorConfig) -> Result<Kernel> {
-        // get kernel params
-        let mut kernel_params = KernelParams::new(config.debug_info.enable_debug);
-
-        if config.boot_info.initrd.is_empty() {
-            // DAX is disabled on ARM due to a kernel panic in caches_clean_inval_pou.
-            #[cfg(target_arch = "aarch64")]
-            let use_dax = false;
-            #[cfg(not(target_arch = "aarch64"))]
-            let use_dax = true;
-
-            let mut rootfs_params = KernelParams::new_rootfs_kernel_params(
-                &config.boot_info.kernel_verity_params,
-                &config.boot_info.vm_rootfs_driver,
-                &config.boot_info.rootfs_type,
-                use_dax,
-            )
-            .context("adding rootfs/verity params failed")?;
-            kernel_params.append(&mut rootfs_params);
-        }
-
-        kernel_params.append(&mut KernelParams::from_string(
-            &config.boot_info.kernel_params,
-        ));
-        kernel_params.append(&mut KernelParams::from_string(&format!(
-            "selinux={}",
-            if config.disable_guest_selinux { 0 } else { 1 }
-        )));
-
-        // Emit one kata.extension.<name>.verity_params entry per configured
-        // extension. This is also the activation signal the guest-side systemd
-        // generator and unit key on, so it must be emitted even when
-        // verity_params is empty (e.g. an unmeasured extension on s390x): an
-        // empty value renders as a bare key, which still activates the mount.
-        for extra in &config.guest_extension_images {
-            kernel_params.append(&mut KernelParams::from_string(&format!(
-                "kata.extension.{}.verity_params={}",
-                extra.name, extra.verity_params
-            )));
-        }
-
         Ok(Kernel {
             path: config.boot_info.kernel.clone(),
             initrd_path: config.boot_info.initrd.clone(),
-            params: kernel_params,
+            params: build_qemu_kernel_params(config)?,
         })
     }
 }
@@ -2939,18 +2903,14 @@ impl<'a> QemuCmdLine<'a> {
     fn add_iommu(&mut self) {
         // vIOMMU (Intel IOMMU) is not supported on the "virt" machine type (arm64)
         if self.machine.r#type == "virt" {
-            self.kernel
-                .params
-                .append(&mut KernelParams::from_string("iommu.passthrough=0"));
+            add_qemu_iommu_kernel_params(&mut self.kernel.params, &self.machine.r#type);
             return;
         }
 
         let dev_iommu = DeviceIntelIommu::new();
         self.devices.push(Box::new(dev_iommu));
 
-        self.kernel
-            .params
-            .append(&mut KernelParams::from_string("intel_iommu=on iommu=pt"));
+        add_qemu_iommu_kernel_params(&mut self.kernel.params, &self.machine.r#type);
 
         self.machine.set_kernel_irqchip("split");
     }
@@ -3217,9 +3177,7 @@ impl<'a> QemuCmdLine<'a> {
         console_socket_chardev.set_wait(false);
         self.devices.push(Box::new(console_socket_chardev));
 
-        self.kernel
-            .params
-            .append(&mut KernelParams::from_string("console=hvc0"));
+        add_qemu_console_kernel_params(&mut self.kernel.params);
     }
 
     pub fn add_virtio_balloon(&mut self) {
@@ -3235,20 +3193,7 @@ impl<'a> QemuCmdLine<'a> {
             .set_confidential_guest_support("pv0")
             .set_nvdimm(false);
 
-        self.kernel.params.remove_all_by_key("reboot".to_string());
-        self.kernel
-            .params
-            .remove_all_by_key("systemd.unit".to_string());
-        self.kernel
-            .params
-            .remove_all_by_key("systemd.mask".to_string());
-        self.kernel.params.remove_all_by_key("root".to_string());
-        self.kernel
-            .params
-            .remove_all_by_key("rootflags".to_string());
-        self.kernel
-            .params
-            .remove_all_by_key("rootfstype".to_string());
+        remove_qemu_secure_execution_kernel_params(&mut self.kernel.params);
     }
 
     pub fn add_sev_protection_device(
