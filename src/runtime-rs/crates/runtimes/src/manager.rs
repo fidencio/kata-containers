@@ -16,10 +16,7 @@ use common::{
 };
 
 use containerd_shim_protos::events::task::{TaskCreate, TaskDelete, TaskStart};
-use hypervisor::{
-    utils::{create_dir_all_with_inherit_owner, create_vmm_user, remove_vmm_user},
-    Param,
-};
+use hypervisor::utils::{create_dir_all_with_inherit_owner, create_vmm_user, remove_vmm_user};
 use kata_sys_util::{mount::get_mount_path, spec::load_oci_spec};
 use kata_types::{
     annotations::Annotation,
@@ -883,17 +880,7 @@ fn config_path_matches_defaults(config_path: &str, default_config_paths: Vec<Pat
 // this update the agent-specfic kernel parameters into hypervisor's bootinfo
 // the agent inside the VM will read from file cmdline to get the params and function
 fn update_agent_kernel_params(config: &mut TomlConfig) -> Result<()> {
-    let mut params = vec![];
-    if let Ok(kv) = config.get_agent_kernel_params() {
-        for (k, v) in kv.into_iter() {
-            if let Ok(s) = Param::new(k.as_str(), v.as_str()).to_string() {
-                params.push(s);
-            }
-        }
-        if let Some(h) = config.hypervisor.get_mut(&config.runtime.hypervisor_name) {
-            h.boot_info.add_kernel_params(params);
-        }
-    }
+    config.add_agent_kernel_params();
     Ok(())
 }
 
