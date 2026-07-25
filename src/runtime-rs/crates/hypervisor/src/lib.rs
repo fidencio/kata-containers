@@ -10,6 +10,7 @@ extern crate slog;
 logging::logger_with_subsystem!(sl, "hypervisor");
 
 pub mod device;
+pub mod guest_cmdline;
 pub mod hypervisor_persist;
 pub use device::driver::*;
 pub use device::pci_path::PciPath;
