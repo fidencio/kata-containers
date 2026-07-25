@@ -378,6 +378,7 @@ jobs:
       matrix:
         asset:
           - genpolicy
+          - kata-kernel-whisperer
         stage:
           - ${{ inputs.stage }}
     steps:

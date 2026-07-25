@@ -71,6 +71,11 @@ jobs:
             needs:
               - rust
               - protobuf-compiler
+          - name: kata-kernel-whisperer
+            path: src/tools/kata-kernel-whisperer
+            needs:
+              - rust
+              - protobuf-compiler
           - name: trace-forwarder
             path: src/tools/trace-forwarder
             needs:

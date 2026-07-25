@@ -12,6 +12,7 @@ updates:
       - "/src/tools/agent-ctl"
       - "/src/tools/genpolicy"
       - "/src/tools/kata-ctl"
+      - "/src/tools/kata-kernel-whisperer"
       - "/src/tools/trace-forwarder"
     schedule:
       interval: "daily"
