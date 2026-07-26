@@ -130,6 +130,9 @@ pub fn k3s_rke2_rendered_has_import(content: &str, use_v3: bool) -> bool {
 /// This is where Kata artifacts are installed by default.
 pub const DEFAULT_KATA_INSTALL_DIR: &str = "/opt/kata";
 
+/// Where the node's filesystem is mounted inside the kata-deploy pod.
+pub const DEFAULT_HOST_ROOT: &str = "/host";
+
 /// Containerd configuration paths and capabilities for a specific runtime
 #[derive(Debug, Clone)]
 pub struct ContainerdPaths {
@@ -195,6 +198,10 @@ pub struct Config {
     pub erofs_merge_mode: Option<String>,
     pub experimental_force_guest_pull_for_arch: Vec<String>,
     pub dest_dir: String,
+    /// Prefix the node's filesystem is reachable under. The DaemonSet bind-mounts
+    /// the node at /host; `render-configs` points it at a directory instead so a
+    /// configuration tree can be rendered without a node.
+    pub host_root: String,
     pub host_install_dir: String,
     pub crio_drop_in_conf_dir: String,
     pub crio_drop_in_conf_file: String,
@@ -303,7 +310,8 @@ impl Config {
             dest_dir
         };
 
-        let host_install_dir = format!("/host{dest_dir}");
+        let host_root = DEFAULT_HOST_ROOT.to_string();
+        let host_install_dir = format!("{host_root}{dest_dir}");
 
         let crio_drop_in_conf_dir = "/etc/crio/crio.conf.d/".to_string();
         let crio_drop_in_conf_file = if let Some(ref suffix) = multi_install_suffix {
@@ -435,6 +443,7 @@ impl Config {
             erofs_merge_mode,
             experimental_force_guest_pull_for_arch,
             dest_dir,
+            host_root,
             host_install_dir,
             crio_drop_in_conf_dir,
             crio_drop_in_conf_file,
@@ -456,6 +465,53 @@ impl Config {
         config.validate()?;
 
         Ok(config)
+    }
+
+    /// Translate an absolute node path into the path this process must use to
+    /// reach it.
+    pub fn host_path(&self, path: &str) -> String {
+        format!("{}{}", self.host_root, path)
+    }
+
+    /// A configuration for tests that need one without going through the
+    /// environment.
+    #[cfg(test)]
+    pub(crate) fn for_tests(shims: &[&str]) -> Self {
+        let dest_dir = DEFAULT_KATA_INSTALL_DIR.to_string();
+        Config {
+            node_name: "test".to_string(),
+            debug: true,
+            shims_for_arch: shims.iter().map(|s| s.to_string()).collect(),
+            default_shim_for_arch: shims.first().unwrap_or(&"qemu").to_string(),
+            allowed_hypervisor_annotations_for_arch: vec![],
+            snapshotter_handler_mapping_for_arch: None,
+            agent_https_proxy: None,
+            agent_no_proxy: None,
+            pull_type_mapping_for_arch: None,
+            installation_prefix: None,
+            multi_install_suffix: None,
+            devkit_enabled: false,
+            helm_post_delete_hook: false,
+            experimental_setup_snapshotter: None,
+            erofs_merge_mode: None,
+            experimental_force_guest_pull_for_arch: vec![],
+            host_root: DEFAULT_HOST_ROOT.to_string(),
+            host_install_dir: format!("{DEFAULT_HOST_ROOT}{dest_dir}"),
+            dest_dir,
+            crio_drop_in_conf_dir: String::new(),
+            crio_drop_in_conf_file: String::new(),
+            crio_drop_in_conf_file_debug: String::new(),
+            containerd_conf_file: String::new(),
+            containerd_conf_file_backup: String::new(),
+            containerd_drop_in_conf_file: String::new(),
+            containerd_user_drop_in_source_file: None,
+            daemonset_name: "kata-deploy".to_string(),
+            custom_runtimes_enabled: false,
+            custom_runtimes: vec![],
+            erofs_snapshotter_mode: None,
+            erofs_dmverity: false,
+            startup_taints: vec![],
+        }
     }
 
     /// Validate configuration parameters
