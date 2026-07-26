@@ -27,6 +27,13 @@ struct Args {
     #[arg(long, value_enum)]
     log_level: Option<LogLevel>,
 
+    /// Prefix the node's filesystem is reachable under. The DaemonSet bind-mounts
+    /// the node at /host, which is the default for every action that runs there;
+    /// `render-configs` instead defaults to the current root, so it can render a
+    /// tree extracted anywhere. Only honored by `render-configs`.
+    #[arg(long, value_name = "DIR", default_value = "/")]
+    host_root: String,
+
     #[arg(value_enum)]
     action: Action,
 }
@@ -90,6 +97,14 @@ enum Action {
     /// filesystem under the install dir).
     #[clap(name = "cleanup-stage-remove-artifacts")]
     CleanupStageRemoveArtifacts,
+    /// Render the configuration tree this configuration would install - drop-ins,
+    /// variant RuntimeClasses and all - into `--host-root`, plus a manifest
+    /// describing every RuntimeClass it defines. Reads an already extracted
+    /// static tarball; touches neither the node, CRI nor the apiserver, and needs
+    /// no root. Meant for build and release tooling that has to know what a
+    /// RuntimeClass boots with.
+    #[clap(name = "render-configs")]
+    RenderConfigs,
     /// Internal: entered via re-exec after install completes. Holds the
     /// DaemonSet pod alive waiting for SIGTERM, then runs cleanup. Hidden
     /// from `--help`; users should never invoke this directly.
@@ -137,12 +152,24 @@ async fn main() -> Result<()> {
         .filter_level(log_level)
         .init();
 
-    // Check if running as root (UID 0)
-    if unsafe { libc::geteuid() } != 0 {
+    // Every action but render-configs mutates the node it runs on.
+    let mutates_node = !matches!(args.action, Action::RenderConfigs);
+
+    if mutates_node && unsafe { libc::geteuid() } != 0 {
         return Err(anyhow::anyhow!("This program must be run as root"));
     }
 
-    let config = config::Config::from_env()?;
+    // NODE_NAME names the node being installed onto. A render targets a
+    // directory instead, so give the configuration something to accept.
+    if !mutates_node && std::env::var_os("NODE_NAME").is_none() {
+        std::env::set_var("NODE_NAME", "kata-deploy-render");
+    }
+
+    let mut config = config::Config::from_env()?;
+    if !mutates_node {
+        config.set_host_root(&args.host_root);
+    }
+
     let action_str = match args.action {
         Action::Install => "install",
         Action::Cleanup => "cleanup",
@@ -154,6 +181,7 @@ async fn main() -> Result<()> {
         Action::CleanupStageUnlabel => "cleanup-stage-unlabel",
         Action::CleanupStageRevertCri => "cleanup-stage-revert-cri",
         Action::CleanupStageRemoveArtifacts => "cleanup-stage-remove-artifacts",
+        Action::RenderConfigs => "render-configs",
         Action::InternalPostInstallWait => "internal-post-install-wait",
     };
     config.print_info(action_str);
@@ -162,6 +190,9 @@ async fn main() -> Result<()> {
     // install — trust the env var and skip the apiserver round-trip. For
     // every other action we always detect from the cluster.
     let runtime = match args.action {
+        // A render writes no CRI configuration, so there is no runtime to detect
+        // and no cluster to ask.
+        Action::RenderConfigs => String::new(),
         Action::InternalPostInstallWait => std::env::var(DETECTED_RUNTIME_ENV)
             .with_context(|| format!("missing {DETECTED_RUNTIME_ENV} env var after re-exec"))?,
         _ => {
@@ -327,6 +358,10 @@ async fn main() -> Result<()> {
         Action::CleanupStageRemoveArtifacts => {
             cleanup_stage_remove_artifacts(&config).await?;
             info!("Cleanup remove-artifacts stage completed, exiting");
+        }
+        Action::RenderConfigs => {
+            artifacts::render_configs(&config).await?;
+            info!("Configuration rendering completed, exiting");
         }
     }
 

@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::artifacts::manifest;
 use crate::config::{Config, DEFAULT_KATA_INSTALL_DIR};
 use crate::k8s::nfd;
 use crate::k8s::runtimeclasses;
@@ -61,7 +62,7 @@ fn get_all_valid_shims() -> String {
 }
 
 /// Get hypervisor name from shim name
-fn get_hypervisor_name(shim: &str) -> Result<&str> {
+pub(crate) fn get_hypervisor_name(shim: &str) -> Result<&str> {
     if is_qemu_shim(shim) {
         return Ok("qemu");
     }
@@ -137,6 +138,54 @@ pub async fn install_artifacts(config: &Config, container_runtime: &str) -> Resu
     if expand_runtime_classes_for_nfd {
         runtimeclasses::update_existing_runtimeclasses_for_nfd(config).await?;
     }
+
+    Ok(())
+}
+
+/// Render the configuration tree that this kata-deploy configuration would
+/// install, without needing the node it normally installs onto: no artifact
+/// extraction, no CRI configuration, no Kubernetes API calls, no root.
+///
+/// Everything that shapes a guest kernel command line is decided here and not by
+/// the runtime - the drop-ins, the debug and devkit variant RuntimeClasses, the
+/// per-shim overrides - so this rendered tree, plus the manifest describing it,
+/// is what a tool has to read to know what a RuntimeClass will boot with.
+/// `install_artifacts` runs these very same steps on a node.
+///
+/// Expects an already extracted installation tree (a static tarball) at
+/// `config.host_install_dir`, since the drop-ins are generated from the
+/// configuration files shipped in it.
+pub async fn render_configs(config: &Config) -> Result<()> {
+    let install_path = Path::new(&config.host_install_dir);
+    if !install_path.is_dir() {
+        return Err(anyhow::anyhow!(
+            "No Kata installation found at {}. Extract a static tarball there first, \
+             or point --host-root at the prefix holding one.",
+            config.host_install_dir
+        ));
+    }
+
+    info!(
+        "Rendering configuration tree for {} shim(s) under {}",
+        config.shims_for_arch.len(),
+        config.host_install_dir
+    );
+
+    // The container runtime only selects the k0s kubelet root drop-in, which
+    // this rendering is not concerned with; nothing here writes CRI config.
+    let container_runtime = "containerd";
+
+    for shim in &config.shims_for_arch {
+        configure_shim_config(config, shim, container_runtime).await?;
+    }
+
+    if config.custom_runtimes_enabled && !config.custom_runtimes.is_empty() {
+        install_custom_runtime_configs(config, container_runtime)?;
+    }
+
+    reconcile_debug_variant_artifacts(config)?;
+
+    manifest::RuntimeManifest::from_config(config)?.write(config)?;
 
     Ok(())
 }

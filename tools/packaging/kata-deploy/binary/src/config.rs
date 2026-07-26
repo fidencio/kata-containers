@@ -473,6 +473,14 @@ impl Config {
         format!("{}{}", self.host_root, path)
     }
 
+    /// Reach the node's filesystem under `host_root` rather than the default
+    /// /host. A trailing slash (and `/` itself) means "no prefix", so paths stay
+    /// absolute as-is.
+    pub fn set_host_root(&mut self, host_root: &str) {
+        self.host_root = host_root.trim_end_matches('/').to_string();
+        self.host_install_dir = self.host_path(&self.dest_dir);
+    }
+
     /// The runtime handler, and hence the RuntimeClass name, kata-deploy
     /// registers for `shim`.
     pub fn runtime_handler_for_shim(&self, shim: &str) -> String {
