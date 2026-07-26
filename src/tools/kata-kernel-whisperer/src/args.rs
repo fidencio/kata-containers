@@ -33,6 +33,13 @@ pub(crate) struct Args {
     #[arg(long, value_name = "DIR")]
     pub(crate) kata_root: Option<PathBuf>,
 
+    /// Read the RuntimeClass manifest from FILE rather than from the
+    /// installation root, for callers that hold the manifest but do not keep it
+    /// in the installation. The configuration paths it names are still resolved
+    /// against --kata-root, which is required alongside it.
+    #[arg(long, value_name = "FILE", requires = "kata_root")]
+    pub(crate) manifest: Option<PathBuf>,
+
     /// Emit the report as JSON: architecture, one entry per described
     /// RuntimeClass, and the ones that were skipped.
     #[arg(long)]

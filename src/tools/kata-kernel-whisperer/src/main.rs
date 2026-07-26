@@ -283,7 +283,14 @@ fn collect_targets(args: &Args) -> Result<Vec<Target>> {
     let mut targets = Vec::new();
 
     if let Some(kata_root) = &args.kata_root {
-        match RuntimeManifest::load(kata_root)? {
+        // An explicitly given manifest is the caller's own account of what it
+        // installed, so take it over anything found in the tree.
+        let manifest = match &args.manifest {
+            Some(path) => Some(RuntimeManifest::load_from(path)?),
+            None => RuntimeManifest::load(kata_root)?,
+        };
+
+        match manifest {
             Some(manifest) => targets.extend(targets_from_manifest(kata_root, &manifest)),
             None => {
                 eprintln!(
@@ -548,6 +555,7 @@ kernel_params = "dropin=applied"
         let args = Args {
             config: Vec::new(),
             kata_root: Some(temp_dir.path().to_path_buf()),
+            manifest: None,
             json: false,
         };
         let report = report(&args).unwrap();
@@ -566,6 +574,61 @@ kernel_params = "dropin=applied"
         // name with the runtime-rs ones, so the danger is describing it with
         // runtime-rs' rules. It is out of scope, so it appears nowhere at all.
         assert!(report.skipped.is_empty());
+    }
+
+    /// kata-deploy runs this tool from inside its own container and hands over
+    /// the manifest rather than leaving a copy in the installation it describes.
+    #[test]
+    fn a_manifest_can_be_handed_over_instead_of_found_in_the_installation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let artifact = temp_dir.path().join("artifact");
+        fs::write(&artifact, "").unwrap();
+        write_installation(temp_dir.path(), &artifact);
+
+        // Deliberately elsewhere: the installation has no manifest of its own,
+        // and layout discovery would pick up the Go runtime's class.
+        let handed_over = temp_dir.path().join("handed-over.json");
+        fs::write(
+            &handed_over,
+            r#"{
+  "version": 1,
+  "architecture": "x86_64",
+  "install_dir": "/opt/kata",
+  "runtimes": [
+    {
+      "runtime_class": "kata-qemu",
+      "shim": "qemu",
+      "hypervisor": "qemu",
+      "runtime_rs": false,
+      "config": "share/defaults/kata-containers/runtimes/qemu/configuration-qemu.toml"
+    },
+    {
+      "runtime_class": "kata-qemu-runtime-rs",
+      "shim": "qemu-runtime-rs",
+      "hypervisor": "qemu",
+      "runtime_rs": true,
+      "config": "share/defaults/kata-containers/runtime-rs/runtimes/qemu-runtime-rs/configuration-qemu-runtime-rs.toml"
+    }
+  ]
+}
+"#,
+        )
+        .unwrap();
+
+        let args = Args {
+            config: Vec::new(),
+            kata_root: Some(temp_dir.path().to_path_buf()),
+            manifest: Some(handed_over),
+            json: false,
+        };
+        let report = report(&args).unwrap();
+
+        let described: Vec<_> = report
+            .runtime_classes
+            .iter()
+            .map(|output| output.runtime_class.as_str())
+            .collect();
+        assert_eq!(described, vec!["kata-qemu-runtime-rs"]);
     }
 
     #[test]

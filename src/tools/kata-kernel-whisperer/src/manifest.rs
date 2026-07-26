@@ -54,7 +54,14 @@ impl RuntimeManifest {
             return Ok(None);
         }
 
-        let content = fs::read_to_string(&path)
+        Self::load_from(&path).map(Some)
+    }
+
+    /// Read a manifest from an explicit path, for a caller that has one to hand
+    /// without the installation carrying it - kata-deploy describing a node it
+    /// has just configured, for instance.
+    pub(crate) fn load_from(path: &Path) -> Result<Self> {
+        let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read manifest {}", path.display()))?;
         let manifest: Self = serde_json::from_str(&content)
             .with_context(|| format!("failed to parse manifest {}", path.display()))?;
@@ -68,6 +75,6 @@ impl RuntimeManifest {
             );
         }
 
-        Ok(Some(manifest))
+        Ok(manifest)
     }
 }
