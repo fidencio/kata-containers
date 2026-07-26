@@ -3727,8 +3727,10 @@ name = "kata-deploy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "env_logger 0.10.2",
+ "flate2",
  "humantime",
  "k8s-openapi",
  "kube",

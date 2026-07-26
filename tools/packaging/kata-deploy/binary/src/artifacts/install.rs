@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::artifacts::kernel_cmdline;
 use crate::artifacts::manifest;
 use crate::config::{Config, DEFAULT_KATA_INSTALL_DIR};
 use crate::k8s::nfd;
@@ -14,7 +15,7 @@ use log::info;
 use std::collections::HashSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
 #[cfg(test)]
 use walkdir::WalkDir;
@@ -137,6 +138,14 @@ pub async fn install_artifacts(config: &Config, container_runtime: &str) -> Resu
 
     if expand_runtime_classes_for_nfd {
         runtimeclasses::update_existing_runtimeclasses_for_nfd(config).await?;
+    }
+
+    // Describing what the installed RuntimeClasses boot with is reporting, not
+    // installing: a node whose configurations are in place is a working node
+    // whether or not the description could be produced.
+    if let Err(e) = kernel_cmdline::annotate_runtimeclasses_with_guest_kernel_cmdline(config).await
+    {
+        log::warn!("Could not publish guest kernel command lines: {e:#}");
     }
 
     Ok(())
@@ -1012,26 +1021,16 @@ fn extract_component_tarballs(config: &Config, extracted: &mut HashSet<String>) 
             continue;
         }
 
-        let tarball_name = format!("kata-static-{}.tar.zst", component);
-        let tarball_path = Path::new(TARBALLS_DIR).join(&tarball_name);
-
-        if !tarball_path.exists() {
+        if extract_component_tarball(component, &config.host_install_dir)?
+            == ComponentTarball::Missing
+        {
             anyhow::bail!(
                 "Required component tarball not found: {}. \
                  Ensure the kata-deploy image was built with the '{}' component.",
-                tarball_path.display(),
+                component_tarball_path(component).display(),
                 component
             );
         }
-
-        info!("Extracting component '{}'", component);
-        extract_tarball(&tarball_path, &config.host_install_dir).with_context(|| {
-            format!(
-                "Failed to extract component '{}' from {}",
-                component,
-                tarball_path.display()
-            )
-        })?;
 
         extracted.insert(component.clone());
     }
@@ -1137,6 +1136,45 @@ fn extract_debug_tools_in(
     }
 
     Ok(())
+}
+
+/// Whether a component tarball was present in the kata-deploy image.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ComponentTarball {
+    Extracted,
+    Missing,
+}
+
+/// Tarball of `component` within the kata-deploy image.
+fn component_tarball_path(component: &str) -> PathBuf {
+    Path::new(TARBALLS_DIR).join(format!("kata-static-{component}.tar.zst"))
+}
+
+/// Extract one component tarball into `dest_dir`.
+///
+/// Reports a missing tarball rather than failing, leaving it to the caller to
+/// decide: an image built without a component a shim requires cannot install
+/// that shim, while one built without an install-time helper can still install.
+pub(crate) fn extract_component_tarball(
+    component: &str,
+    dest_dir: &str,
+) -> Result<ComponentTarball> {
+    let tarball_path = component_tarball_path(component);
+
+    if !tarball_path.exists() {
+        return Ok(ComponentTarball::Missing);
+    }
+
+    info!("Extracting component '{}'", component);
+    extract_tarball(&tarball_path, dest_dir).with_context(|| {
+        format!(
+            "Failed to extract component '{}' from {}",
+            component,
+            tarball_path.display()
+        )
+    })?;
+
+    Ok(ComponentTarball::Extracted)
 }
 
 fn set_executable_permissions(dir: &str) -> Result<()> {

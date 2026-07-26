@@ -576,6 +576,36 @@ impl K8sClient {
 
         Ok(())
     }
+
+    /// Set a single annotation on a RuntimeClass.
+    ///
+    /// Patches just the one key rather than sending the whole object back, so
+    /// concurrent writers - every node running kata-deploy patches the same
+    /// cluster-scoped RuntimeClasses - cannot clobber each other's unrelated
+    /// fields.
+    pub async fn patch_runtimeclass_annotation(
+        &self,
+        name: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<()> {
+        use k8s_openapi::api::node::v1::RuntimeClass;
+        use kube::api::{Api, Patch, PatchParams};
+
+        let api: Api<RuntimeClass> = Api::all(self.client.clone());
+        let patch = serde_json::json!({
+            "metadata": {
+                "annotations": {
+                    key: value,
+                }
+            }
+        });
+
+        api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+            .await?;
+
+        Ok(())
+    }
 }
 
 /// Split `taints` into (retained, removed-labels) according to `matchers`.
@@ -711,6 +741,16 @@ pub async fn update_runtimeclass(
 ) -> Result<()> {
     let client = K8sClient::new(&config.node_name).await?;
     client.update_runtimeclass(runtimeclass).await
+}
+
+pub async fn patch_runtimeclass_annotation(
+    config: &Config,
+    name: &str,
+    key: &str,
+    value: &str,
+) -> Result<()> {
+    let client = K8sClient::new(&config.node_name).await?;
+    client.patch_runtimeclass_annotation(name, key, value).await
 }
 
 #[cfg(test)]

@@ -100,6 +100,19 @@ impl RuntimeManifest {
         Ok(content)
     }
 
+    /// Write the manifest to `path`, for a consumer that is handed it directly
+    /// rather than finding it in an installation.
+    pub fn write_to(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create manifest directory: {}", parent.display())
+            })?;
+        }
+
+        fs::write(path, self.to_json()?)
+            .with_context(|| format!("Failed to write manifest: {}", path.display()))
+    }
+
     /// Write the manifest next to the installed configurations.
     pub fn write(&self, config: &Config) -> Result<()> {
         let dir = config.host_path(&format!(
