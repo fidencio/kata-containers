@@ -473,6 +473,15 @@ impl Config {
         format!("{}{}", self.host_root, path)
     }
 
+    /// The runtime handler, and hence the RuntimeClass name, kata-deploy
+    /// registers for `shim`.
+    pub fn runtime_handler_for_shim(&self, shim: &str) -> String {
+        match self.multi_install_suffix.as_deref() {
+            Some(suffix) if !suffix.is_empty() => format!("kata-{shim}-{suffix}"),
+            _ => format!("kata-{shim}"),
+        }
+    }
+
     /// A configuration for tests that need one without going through the
     /// environment.
     #[cfg(test)]
