@@ -35,6 +35,7 @@ readonly kernel_builder="${static_build_dir}/kernel/build.sh"
 readonly ovmf_builder="${static_build_dir}/ovmf/build.sh"
 readonly pause_image_builder="${static_build_dir}/pause-image/build.sh"
 readonly qemu_builder="${static_build_dir}/qemu/build-static-qemu.sh"
+readonly qemu_no_shared_fs_builder="${static_build_dir}/qemu/build-static-qemu-no-shared-fs.sh"
 readonly qemu_experimental_builder="${static_build_dir}/qemu/build-static-qemu-experimental.sh"
 readonly stratovirt_builder="${static_build_dir}/stratovirt/build-static-stratovirt.sh"
 readonly shimv2_builder="${static_build_dir}/shim-v2/build.sh"
@@ -145,6 +146,7 @@ options:
 	ovmf-sev
 	ovmf-tdx
 	qemu
+	qemu-no-shared-fs
 	qemu-snp-experimental
 	qemu-tdx-experimental
 	stratovirt
@@ -1323,6 +1325,20 @@ install_qemu() {
 		"${qemu_builder}"
 }
 
+# Install the static qemu asset trimmed down to the runtime classes that run
+# without a shared filesystem.  It is the same qemu as install_qemu, so it
+# tracks the same versions.yaml entry.
+install_qemu_no_shared_fs() {
+	export qemu_suffix="no-shared-fs"
+	export qemu_tarball_name="kata-static-qemu-${qemu_suffix}.tar.gz"
+
+	install_qemu_helper \
+		"assets.hypervisor.qemu.url" \
+		"assets.hypervisor.qemu.version" \
+		"qemu-${qemu_suffix}" \
+		"${qemu_no_shared_fs_builder}"
+}
+
 install_qemu_snp_experimental() {
 	export qemu_suffix="snp-experimental"
 	export qemu_tarball_name="kata-static-qemu-${qemu_suffix}.tar.gz"
@@ -1850,6 +1866,7 @@ handle_build() {
 		install_ovmf_sev
 		install_ovmf_tdx
 		install_qemu
+		install_qemu_no_shared_fs
 		install_qemu_snp_experimental
 		install_qemu_tdx_experimental
 		install_stratovirt
@@ -1900,6 +1917,8 @@ handle_build() {
 	pause-image) install_pause_image ;;
 
 	qemu) install_qemu ;;
+
+	qemu-no-shared-fs) install_qemu_no_shared_fs ;;
 
 	qemu-snp-experimental) install_qemu_snp_experimental ;;
 

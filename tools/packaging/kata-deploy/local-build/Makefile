@@ -22,6 +22,7 @@ BASE_TARBALLS = serial-targets \
 	ovmf-sev-tarball \
 	ovmf-tdx-tarball \
 	ovmf-tarball \
+	qemu-no-shared-fs-tarball \
 	qemu-snp-experimental-tarball \
 	qemu-tdx-experimental-tarball \
 	qemu-tarball \
@@ -63,6 +64,7 @@ BASE_TARBALLS = serial-targets \
 	kernel-tarball \
 	nydus-tarball \
 	ovmf-tarball \
+	qemu-no-shared-fs-tarball \
 	qemu-tarball \
 	shim-v2-go-tarball \
 	shim-v2-rust-tarball \
@@ -108,6 +110,7 @@ NVGPU_BASE_TARBALLS = \
 	ovmf-tdx-tarball \
 	ovmf-tarball \
 	pause-image-tarball \
+	qemu-no-shared-fs-tarball \
 	qemu-snp-experimental-tarball \
 	qemu-tdx-experimental-tarball \
 	qemu-tarball \
@@ -122,6 +125,7 @@ NVGPU_BASE_TARBALLS = \
 	kernel-nvidia-gpu-tarball \
 	ovmf-tarball \
 	pause-image-tarball \
+	qemu-no-shared-fs-tarball \
 	qemu-tarball \
 	virtiofsd-tarball \
 	serial-targets
@@ -137,6 +141,7 @@ NVGPU_FINAL_TARBALL_INPUTS = \
 	kata-static-ovmf-tdx.tar.zst \
 	kata-static-ovmf.tar.zst \
 	kata-static-pause-image.tar.zst \
+	kata-static-qemu-no-shared-fs.tar.zst \
 	kata-static-qemu-snp-experimental.tar.zst \
 	kata-static-qemu-tdx-experimental.tar.zst \
 	kata-static-qemu.tar.zst \
@@ -290,6 +295,9 @@ ovmf-tdx-tarball:
 	${MAKE} $@-build
 
 ovmf-tarball:
+	${MAKE} $@-build
+
+qemu-no-shared-fs-tarball:
 	${MAKE} $@-build
 
 qemu-snp-experimental-tarball:
