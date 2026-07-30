@@ -37,6 +37,7 @@ kata-static-nydus.tar.zst
 kata-static-ovmf-sev.tar.zst
 kata-static-ovmf-tdx.tar.zst
 kata-static-ovmf.tar.zst
+kata-static-qemu-no-shared-fs.tar.zst
 kata-static-qemu-snp-experimental.tar.zst
 kata-static-qemu-tdx-experimental.tar.zst
 kata-static-qemu.tar.zst
@@ -61,6 +62,7 @@ kata-static-kernel-nvidia-gpu.tar.zst
 kata-static-kernel.tar.zst
 kata-static-nydus.tar.zst
 kata-static-ovmf.tar.zst
+kata-static-qemu-no-shared-fs.tar.zst
 kata-static-qemu.tar.zst
 kata-static-rootfs-image-coco-extension.tar.zst
 kata-static-rootfs-image-devkit-extension.tar.zst
