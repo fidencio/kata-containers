@@ -125,6 +125,21 @@ impl DeviceManager {
         self.pcie_topology.clone()
     }
 
+    /// Grows the PCIe root port pool by `count` ports.
+    ///
+    /// QEMU can only create root ports on its command line, so devices that are
+    /// hot-plugged later have to have their port reserved before the VM is
+    /// launched.
+    pub fn reserve_pcie_root_ports(&mut self, count: u32) {
+        if count == 0 {
+            return;
+        }
+
+        if let Some(topology) = self.pcie_topology.as_mut() {
+            topology.pcie_root_ports += count;
+        }
+    }
+
     async fn get_block_device_info(&self) -> BlockDeviceInfo {
         self.hypervisor.hypervisor_config().await.blockdev_info
     }
