@@ -351,6 +351,13 @@ impl ResourceManagerInner {
         }
 
         if let Some(network) = self.network.as_ref() {
+            // Plug in the endpoints that had to wait for the VM to be up,
+            // such as DAN's hot-plugged VFIO NICs.
+            network
+                .setup_after_start_vm()
+                .await
+                .context("setup network after start vm")?;
+
             // For cold-plugged physical-endpoint VFs, the PCIe topology
             // pre-computes a wrong path because the root port has no explicit
             // addr and QEMU auto-assigns its slot.  Resolve the actual path

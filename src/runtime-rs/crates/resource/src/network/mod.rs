@@ -39,6 +39,13 @@ pub enum NetworkConfig {
 #[async_trait]
 pub trait Network: Send + Sync {
     async fn setup(&self) -> Result<()>;
+    /// Plugs in the endpoints that can only be attached once the VM is
+    /// running, such as hot-plugged VFIO NICs. Runs before the interfaces are
+    /// handed to the agent, so that any guest device path discovered here is
+    /// included.
+    async fn setup_after_start_vm(&self) -> Result<()> {
+        Ok(())
+    }
     async fn interfaces(&self) -> Result<Vec<agent::Interface>>;
     async fn routes(&self) -> Result<Vec<agent::Route>>;
     async fn neighs(&self) -> Result<Vec<agent::ARPNeighbor>>;
