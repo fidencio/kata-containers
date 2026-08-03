@@ -38,6 +38,11 @@ jobs:
     uses: ./.github/workflows/ci.yaml
     with:
       commit-hash: ${{ github.event.pull_request.head.sha }}
+      # What this lane has always done, now that it has to be said out loud:
+      # a fork's commit, checked out by a pull_request_target holding every
+      # secret. The label is the only thing behind it, which is the whole reason
+      # the other two lanes exist and this one is being emptied out.
+      allow-unsafe-pr-checkout: true
       pr-number: ${{ github.event.pull_request.number }}
       tag: ${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
       target-branch: ${{ github.event.pull_request.base.ref }}

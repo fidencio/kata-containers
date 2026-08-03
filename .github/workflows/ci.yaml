@@ -5,6 +5,16 @@ on:
       commit-hash:
         required: true
         type: string
+      allow-unsafe-pr-checkout:
+        # True from the pull_request_target lane, and only from there: that lane
+        # hands this one a fork's commit and runs it with every secret the
+        # repository holds, which is the pairing actions/checkout refuses unless
+        # asked. The nightly and devel lanes pass a commit of this repository's
+        # own, so the question does not arise for them. It goes away with the
+        # lane - see .github/workflows/ci-on-push-prt.yaml.
+        required: false
+        type: boolean
+        default: false
       pr-number:
         required: true
         type: string
@@ -339,6 +349,7 @@ jobs:
       repo: ${{ github.repository_owner }}/kata-deploy-ci
       tag: ${{ inputs.tag }}-amd64
       commit-hash: ${{ inputs.commit-hash }}
+      allow-unsafe-pr-checkout: ${{ inputs.allow-unsafe-pr-checkout }}
       pr-number: ${{ inputs.pr-number }}
       target-branch: ${{ inputs.target-branch }}
     secrets:

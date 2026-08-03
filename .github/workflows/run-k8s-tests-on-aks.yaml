@@ -20,6 +20,15 @@ on:
       commit-hash:
         required: false
         type: string
+      allow-unsafe-pr-checkout:
+        # For a caller whose event is privileged and whose commit-hash is a
+        # fork's: actions/checkout refuses that pairing from v7 on, and a caller
+        # that means it has to say so. Two do, both behind a maintainer's label:
+        # the trusted lane (ci-on-push-trusted.yaml) and, until it goes, the
+        # pull_request_target one, which reaches this suite through ci.yaml.
+        required: false
+        type: boolean
+        default: false
       target-branch:
         required: false
         type: string
@@ -90,9 +99,15 @@ jobs:
       GENPOLICY_PULL_METHOD: ${{ matrix.genpolicy-pull-method }}
       RUNS_ON_AKS: "true"
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # Ahead of the rest of the repository, deliberately: this is the first
+      # suite whose privileged callers check out a fork, so it is the one that
+      # has to face the guard rather than be handed it by a later bump. Every
+      # caller that needs the opt-out below therefore says so today, and is
+      # tested saying so.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.commit-hash }}
+          allow-unsafe-pr-checkout: ${{ inputs.allow-unsafe-pr-checkout }}
           fetch-depth: 0
           persist-credentials: false
 
