@@ -372,8 +372,12 @@ jobs:
         run: |
           set -o errexit -o nounset -o pipefail
 
-          # Only for the humans reading the pull request: Gatekeeper judges this
-          # lane by the jobs of this run, not by the state of this status.
+          # Mostly for the humans reading the pull request: Gatekeeper judges
+          # this lane by the jobs of this run, not by the state of this status.
+          #
+          # skipped counts as success, for the jobs a lane deliberately leaves
+          # out. A job skipped because something it needed did not succeed does
+          # not hide that, since the job it needed is in here too.
           state=success
           for result in ${RESULTS}; do
             case "${result}" in
@@ -388,3 +392,13 @@ jobs:
             --field context='Trusted CI lane' \
             --field target_url="${RUN_URL}" \
             --field description="The trusted lane finished with: ${RESULTS}"
+
+          # This job runs on always(), which includes the lane having been
+          # cancelled, so passing here would leave a green job - and a green run
+          # conclusion - on top of a lane that never finished. Carry the verdict
+          # into this job's own outcome, so that every way of looking at the run
+          # agrees with the status just posted.
+          if [[ "${state}" != "success" ]]; then
+            echo "::error::The trusted lane did not succeed: ${RESULTS}"
+            exit 1
+          fi
