@@ -118,9 +118,73 @@ jobs:
             --field target_url="${RUN_URL}" \
             --field description='Collecting the results of the trusted lane'
 
+  # The lane is triggered when the untrusted run starts, not when it finishes,
+  # so that the wait below is only for the artifacts it needs rather than for
+  # every test the untrusted lane runs. Waiting for the whole run would put the
+  # untrusted lane's slowest suite in front of everything here.
+  wait-for-artifacts:
+    name: wait-for-artifacts
+    needs: [resolve]
+    if: ${{ needs.resolve.outputs.stale == 'false' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read # needed to read the untrusted run and its artifacts
+    # Long enough to cover a cold amd64 build, and short enough to report a
+    # stuck untrusted lane rather than sit out the six hour default.
+    timeout-minutes: 180
+    steps:
+      - name: Wait for the untrusted run to upload what this lane consumes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          # Keyed on the artifacts rather than on the job names, because the
+          # artifacts are the actual dependency, and their names are all this
+          # lane knows the untrusted jobs by.
+          EXPECTED: |
+            kata-deploy-image-tarball-amd64${{ needs.resolve.outputs.tarball-suffix }}
+            kata-monitor-image-tarball-amd64${{ needs.resolve.outputs.tarball-suffix }}
+            kata-tools-static-tarball-amd64${{ needs.resolve.outputs.tarball-suffix }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          deadline=$((SECONDS + 170 * 60))
+
+          while :; do
+            uploaded="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+              --jq '.artifacts[].name')"
+
+            missing=()
+            while read -r want; do
+              [[ -n "${want}" ]] || continue
+              grep -qxF "${want}" <<< "${uploaded}" || missing+=("${want}")
+            done <<< "${EXPECTED}"
+
+            if [[ "${#missing[@]}" -eq 0 ]]; then
+              echo "All expected artifacts are uploaded."
+              break
+            fi
+
+            # The untrusted run reaching a terminal state without them means
+            # they are never coming: a build failed, or the run was cancelled.
+            status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.status')"
+            if [[ "${status}" == "completed" ]]; then
+              echo "::error::The untrusted run finished without uploading: ${missing[*]}"
+              exit 1
+            fi
+
+            if [[ "${SECONDS}" -ge "${deadline}" ]]; then
+              echo "::error::Gave up waiting for: ${missing[*]}"
+              exit 1
+            fi
+
+            echo "Still waiting for ${#missing[@]} artifact(s): ${missing[*]}"
+            sleep 60
+          done
+
   report:
     name: report
-    needs: [resolve]
+    needs: [resolve, wait-for-artifacts]
     # always(), so that a failing suite still resolves the pending status the
     # resolve job left on the pull request.
     if: ${{ always() && needs.resolve.result == 'success' && needs.resolve.outputs.stale == 'false' }}
