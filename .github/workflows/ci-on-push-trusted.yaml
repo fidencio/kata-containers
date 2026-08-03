@@ -261,9 +261,51 @@ jobs:
           # arriving from two different lanes.
           publish kata-monitor.tar kata-monitor-ci
 
+  # The suites fetch their artifacts by name from the run they are part of, and
+  # the ones they want were uploaded to the untrusted run. Copying them over is
+  # what lets every suite workflow stay exactly as it is: teaching each of them
+  # to fetch from another run instead would mean an input, a token and a step in
+  # all of them, for the benefit of this lane alone.
+  #
+  # Only small artifacts belong here. The image archives are big, and nothing
+  # downstream reads them from an artifact anyway - publish-images turns them
+  # into something the clusters can pull.
+  restage-artifacts:
+    name: restage-artifacts
+    needs: [resolve, wait-for-artifacts]
+    if: ${{ needs.resolve.outputs.stale == 'false' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read # needed to fetch the untrusted run's artifacts
+    steps:
+      - name: get-kata-tools-tarball
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: kata-tools-static-tarball-amd64${{ needs.resolve.outputs.tarball-suffix }}
+          path: restaged
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: store-artifact kata-tools-static-tarball-amd64
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: kata-tools-static-tarball-amd64${{ needs.resolve.outputs.tarball-suffix }}
+          # Named file rather than the directory, so the artifact keeps the shape
+          # the build gave it and a suite finds what it expects at the top.
+          path: restaged/kata-tools-static.tar.zst
+          # Nothing outside this run reads it, and the build's own copy is the
+          # one worth keeping around.
+          retention-days: 1
+          # Already-compressed tarball; deflating it again costs time and saves
+          # close to nothing.
+          compression-level: 0
+          # The build having changed the layout under us should stop the lane
+          # here, not surface as a puzzling failure inside a suite.
+          if-no-files-found: error
+
   report:
     name: report
-    needs: [resolve, wait-for-artifacts, publish-images]
+    needs: [resolve, wait-for-artifacts, publish-images, restage-artifacts]
     # always(), so that a failing suite still resolves the pending status the
     # resolve job left on the pull request.
     if: ${{ always() && needs.resolve.result == 'success' && needs.resolve.outputs.stale == 'false' }}
