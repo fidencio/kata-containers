@@ -153,105 +153,111 @@ jobs:
     secrets:
       QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
 
-  build-kata-static-tarball-s390x:
-    permissions:
-      contents: read
-      packages: write # needed to push build artifacts to ghcr.io
-      id-token: write # needed to sign images and generate attestations
-      attestations: write # needed to generate artifact attestations
-    uses: ./.github/workflows/build-kata-static-tarball-s390x.yaml
-    with:
-      tarball-suffix: -${{ inputs.tag }}
-      commit-hash: ${{ inputs.commit-hash }}
-      target-branch: ${{ inputs.target-branch }}
-    secrets:
-      QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
+  # TEMPORARY, and only while the two new lanes are being proven in this
+  # sandbox: every s390x and ppc64le job is commented out, here and in the
+  # matching entries of tools/testing/gatekeeper/required-tests.yaml, so that a
+  # run can be read for what the new lanes actually cover instead of waiting on
+  # architectures neither of them builds yet. Restore both before this goes
+  # anywhere near upstream.
+  # build-kata-static-tarball-s390x:
+  #   permissions:
+  #     contents: read
+  #     packages: write # needed to push build artifacts to ghcr.io
+  #     id-token: write # needed to sign images and generate attestations
+  #     attestations: write # needed to generate artifact attestations
+  #   uses: ./.github/workflows/build-kata-static-tarball-s390x.yaml
+  #   with:
+  #     tarball-suffix: -${{ inputs.tag }}
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     target-branch: ${{ inputs.target-branch }}
+  #   secrets:
+  #     QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
 
-  build-kata-static-tarball-ppc64le:
-    permissions:
-      contents: read
-      packages: write # needed to push build artifacts to ghcr.io
-    uses: ./.github/workflows/build-kata-static-tarball-ppc64le.yaml
-    with:
-      tarball-suffix: -${{ inputs.tag }}
-      commit-hash: ${{ inputs.commit-hash }}
-      target-branch: ${{ inputs.target-branch }}
-    secrets:
-      QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
+  # build-kata-static-tarball-ppc64le:
+  #   permissions:
+  #     contents: read
+  #     packages: write # needed to push build artifacts to ghcr.io
+  #   uses: ./.github/workflows/build-kata-static-tarball-ppc64le.yaml
+  #   with:
+  #     tarball-suffix: -${{ inputs.tag }}
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     target-branch: ${{ inputs.target-branch }}
+  #   secrets:
+  #     QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
 
-  publish-kata-deploy-image-s390x:
-    needs: build-kata-static-tarball-s390x
-    permissions:
-      contents: read
-      packages: write # needed to push build artifacts to ghcr.io
-    uses: ./.github/workflows/publish-kata-images.yaml
-    with:
-      tarball-suffix: -${{ inputs.tag }}
-      registry: ghcr.io
-      repo: ${{ github.repository_owner }}/kata-deploy-ci
-      tag: ${{ inputs.tag }}-s390x
-      commit-hash: ${{ inputs.commit-hash }}
-      target-branch: ${{ inputs.target-branch }}
-      runner: ubuntu-24.04-s390x
-      arch: s390x
-    secrets:
-      QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
+  # publish-kata-deploy-image-s390x:
+  #   needs: build-kata-static-tarball-s390x
+  #   permissions:
+  #     contents: read
+  #     packages: write # needed to push build artifacts to ghcr.io
+  #   uses: ./.github/workflows/publish-kata-images.yaml
+  #   with:
+  #     tarball-suffix: -${{ inputs.tag }}
+  #     registry: ghcr.io
+  #     repo: ${{ github.repository_owner }}/kata-deploy-ci
+  #     tag: ${{ inputs.tag }}-s390x
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     target-branch: ${{ inputs.target-branch }}
+  #     runner: ubuntu-24.04-s390x
+  #     arch: s390x
+  #   secrets:
+  #     QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
 
-  publish-kata-monitor-image-s390x:
-    needs: build-kata-static-tarball-s390x
-    permissions:
-      contents: read
-      packages: write # needed to push build artifacts to ghcr.io
-    uses: ./.github/workflows/publish-kata-images.yaml
-    with:
-      tarball-suffix: -${{ inputs.tag }}
-      registry: ghcr.io
-      repo: ${{ github.repository_owner }}/kata-monitor-ci
-      tag: ${{ inputs.tag }}-s390x
-      commit-hash: ${{ inputs.commit-hash }}
-      target-branch: ${{ inputs.target-branch }}
-      runner: ubuntu-24.04-s390x
-      arch: s390x
-      image-kind: monitor
-    secrets:
-      QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
+  # publish-kata-monitor-image-s390x:
+  #   needs: build-kata-static-tarball-s390x
+  #   permissions:
+  #     contents: read
+  #     packages: write # needed to push build artifacts to ghcr.io
+  #   uses: ./.github/workflows/publish-kata-images.yaml
+  #   with:
+  #     tarball-suffix: -${{ inputs.tag }}
+  #     registry: ghcr.io
+  #     repo: ${{ github.repository_owner }}/kata-monitor-ci
+  #     tag: ${{ inputs.tag }}-s390x
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     target-branch: ${{ inputs.target-branch }}
+  #     runner: ubuntu-24.04-s390x
+  #     arch: s390x
+  #     image-kind: monitor
+  #   secrets:
+  #     QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
 
-  publish-kata-deploy-image-ppc64le:
-    needs: build-kata-static-tarball-ppc64le
-    permissions:
-      contents: read
-      packages: write # needed to push build artifacts to ghcr.io
-    uses: ./.github/workflows/publish-kata-images.yaml
-    with:
-      tarball-suffix: -${{ inputs.tag }}
-      registry: ghcr.io
-      repo: ${{ github.repository_owner }}/kata-deploy-ci
-      tag: ${{ inputs.tag }}-ppc64le
-      commit-hash: ${{ inputs.commit-hash }}
-      target-branch: ${{ inputs.target-branch }}
-      runner: ubuntu-24.04-ppc64le
-      arch: ppc64le
-    secrets:
-      QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
+  # publish-kata-deploy-image-ppc64le:
+  #   needs: build-kata-static-tarball-ppc64le
+  #   permissions:
+  #     contents: read
+  #     packages: write # needed to push build artifacts to ghcr.io
+  #   uses: ./.github/workflows/publish-kata-images.yaml
+  #   with:
+  #     tarball-suffix: -${{ inputs.tag }}
+  #     registry: ghcr.io
+  #     repo: ${{ github.repository_owner }}/kata-deploy-ci
+  #     tag: ${{ inputs.tag }}-ppc64le
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     target-branch: ${{ inputs.target-branch }}
+  #     runner: ubuntu-24.04-ppc64le
+  #     arch: ppc64le
+  #   secrets:
+  #     QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
 
-  publish-kata-monitor-image-ppc64le:
-    needs: build-kata-static-tarball-ppc64le
-    permissions:
-      contents: read
-      packages: write # needed to push build artifacts to ghcr.io
-    uses: ./.github/workflows/publish-kata-images.yaml
-    with:
-      tarball-suffix: -${{ inputs.tag }}
-      registry: ghcr.io
-      repo: ${{ github.repository_owner }}/kata-monitor-ci
-      tag: ${{ inputs.tag }}-ppc64le
-      commit-hash: ${{ inputs.commit-hash }}
-      target-branch: ${{ inputs.target-branch }}
-      runner: ubuntu-24.04-ppc64le
-      arch: ppc64le
-      image-kind: monitor
-    secrets:
-      QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
+  # publish-kata-monitor-image-ppc64le:
+  #   needs: build-kata-static-tarball-ppc64le
+  #   permissions:
+  #     contents: read
+  #     packages: write # needed to push build artifacts to ghcr.io
+  #   uses: ./.github/workflows/publish-kata-images.yaml
+  #   with:
+  #     tarball-suffix: -${{ inputs.tag }}
+  #     registry: ghcr.io
+  #     repo: ${{ github.repository_owner }}/kata-monitor-ci
+  #     tag: ${{ inputs.tag }}-ppc64le
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     target-branch: ${{ inputs.target-branch }}
+  #     runner: ubuntu-24.04-ppc64le
+  #     arch: ppc64le
+  #     image-kind: monitor
+  #   secrets:
+  #     QUAY_DEPLOYER_PASSWORD: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
 
   build-and-publish-tee-confidential-unencrypted-image:
     name: build-and-publish-tee-confidential-unencrypted-image
@@ -429,32 +435,33 @@ jobs:
       AZ_TENANT_ID: ${{ secrets.AZ_TENANT_ID }}
       AZ_SUBSCRIPTION_ID: ${{ secrets.AZ_SUBSCRIPTION_ID }}
 
-  run-k8s-tests-on-zvsi:
-    if: ${{ inputs.skip-test != 'yes' }}
-    needs: [publish-kata-deploy-image-s390x, build-and-publish-tee-confidential-unencrypted-image]
-    uses: ./.github/workflows/run-k8s-tests-on-zvsi.yaml
-    with:
-      registry: ghcr.io
-      repo: ${{ github.repository_owner }}/kata-deploy-ci
-      tag: ${{ inputs.tag }}-s390x
-      commit-hash: ${{ inputs.commit-hash }}
-      pr-number: ${{ inputs.pr-number }}
-      target-branch: ${{ inputs.target-branch }}
-      vmm: ${{ (inputs.pr-number == 'nightly' || inputs.pr-number == 'dev') && '["qemu", "qemu-runtime-rs", "qemu-coco-dev", "qemu-coco-dev-runtime-rs"]' || '["qemu", "qemu-runtime-rs", "qemu-coco-dev"]' }}
-    secrets:
-      AUTHENTICATED_IMAGE_PASSWORD: ${{ secrets.AUTHENTICATED_IMAGE_PASSWORD }}
+  # TEMPORARY, sandbox only: see the note above the commented builds.
+  # run-k8s-tests-on-zvsi:
+  #   if: ${{ inputs.skip-test != 'yes' }}
+  #   needs: [publish-kata-deploy-image-s390x, build-and-publish-tee-confidential-unencrypted-image]
+  #   uses: ./.github/workflows/run-k8s-tests-on-zvsi.yaml
+  #   with:
+  #     registry: ghcr.io
+  #     repo: ${{ github.repository_owner }}/kata-deploy-ci
+  #     tag: ${{ inputs.tag }}-s390x
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     pr-number: ${{ inputs.pr-number }}
+  #     target-branch: ${{ inputs.target-branch }}
+  #     vmm: ${{ (inputs.pr-number == 'nightly' || inputs.pr-number == 'dev') && '["qemu", "qemu-runtime-rs", "qemu-coco-dev", "qemu-coco-dev-runtime-rs"]' || '["qemu", "qemu-runtime-rs", "qemu-coco-dev"]' }}
+  #   secrets:
+  #     AUTHENTICATED_IMAGE_PASSWORD: ${{ secrets.AUTHENTICATED_IMAGE_PASSWORD }}
 
-  run-k8s-tests-on-ppc64le:
-    if: ${{ inputs.skip-test != 'yes' }}
-    needs: publish-kata-deploy-image-ppc64le
-    uses: ./.github/workflows/run-k8s-tests-on-ppc64le.yaml
-    with:
-      registry: ghcr.io
-      repo: ${{ github.repository_owner }}/kata-deploy-ci
-      tag: ${{ inputs.tag }}-ppc64le
-      commit-hash: ${{ inputs.commit-hash }}
-      pr-number: ${{ inputs.pr-number }}
-      target-branch: ${{ inputs.target-branch }}
+  # run-k8s-tests-on-ppc64le:
+  #   if: ${{ inputs.skip-test != 'yes' }}
+  #   needs: publish-kata-deploy-image-ppc64le
+  #   uses: ./.github/workflows/run-k8s-tests-on-ppc64le.yaml
+  #   with:
+  #     registry: ghcr.io
+  #     repo: ${{ github.repository_owner }}/kata-deploy-ci
+  #     tag: ${{ inputs.tag }}-ppc64le
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     pr-number: ${{ inputs.pr-number }}
+  #     target-branch: ${{ inputs.target-branch }}
 
   run-kata-deploy-tests:
     if: ${{ inputs.skip-test != 'yes' }}
@@ -477,14 +484,15 @@ jobs:
       commit-hash: ${{ inputs.commit-hash }}
       target-branch: ${{ inputs.target-branch }}
 
-  run-basic-s390x-tests:
-    if: ${{ inputs.skip-test != 'yes' }}
-    needs: build-kata-static-tarball-s390x
-    uses: ./.github/workflows/basic-ci-s390x.yaml
-    with:
-      tarball-suffix: -${{ inputs.tag }}
-      commit-hash: ${{ inputs.commit-hash }}
-      target-branch: ${{ inputs.target-branch }}
+  # TEMPORARY, sandbox only: see the note above the commented builds.
+  # run-basic-s390x-tests:
+  #   if: ${{ inputs.skip-test != 'yes' }}
+  #   needs: build-kata-static-tarball-s390x
+  #   uses: ./.github/workflows/basic-ci-s390x.yaml
+  #   with:
+  #     tarball-suffix: -${{ inputs.tag }}
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     target-branch: ${{ inputs.target-branch }}
 
   run-cri-containerd-tests-amd64:
     if: ${{ inputs.skip-test != 'yes' }}
@@ -517,47 +525,48 @@ jobs:
       containerd_version: ${{ matrix.params.containerd_version }}
       vmm: ${{ matrix.params.vmm }}
 
-  run-cri-containerd-tests-s390x:
-    if: ${{ inputs.skip-test != 'yes' }}
-    needs: build-kata-static-tarball-s390x
-    strategy:
-      fail-fast: false
-      matrix:
-        params: [
-          {containerd_version: latest, vmm: qemu},
-          {containerd_version: latest, vmm: qemu-runtime-rs},
-        ]
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-${{ toJSON(matrix) }}
-      cancel-in-progress: true
-    uses: ./.github/workflows/run-cri-containerd-tests.yaml
-    with:
-      tarball-suffix: -${{ inputs.tag }}
-      commit-hash: ${{ inputs.commit-hash }}
-      target-branch: ${{ inputs.target-branch }}
-      runner: s390x-large
-      arch: s390x
-      containerd_version: ${{ matrix.params.containerd_version }}
-      vmm: ${{ matrix.params.vmm }}
+  # TEMPORARY, sandbox only: see the note above the commented builds.
+  # run-cri-containerd-tests-s390x:
+  #   if: ${{ inputs.skip-test != 'yes' }}
+  #   needs: build-kata-static-tarball-s390x
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       params: [
+  #         {containerd_version: latest, vmm: qemu},
+  #         {containerd_version: latest, vmm: qemu-runtime-rs},
+  #       ]
+  #   concurrency:
+  #     group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-${{ toJSON(matrix) }}
+  #     cancel-in-progress: true
+  #   uses: ./.github/workflows/run-cri-containerd-tests.yaml
+  #   with:
+  #     tarball-suffix: -${{ inputs.tag }}
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     target-branch: ${{ inputs.target-branch }}
+  #     runner: s390x-large
+  #     arch: s390x
+  #     containerd_version: ${{ matrix.params.containerd_version }}
+  #     vmm: ${{ matrix.params.vmm }}
 
-  run-cri-containerd-tests-ppc64le:
-    if: ${{ inputs.skip-test != 'yes' }}
-    needs: build-kata-static-tarball-ppc64le
-    strategy:
-      fail-fast: false
-      matrix:
-        params: [
-          {containerd_version: latest, vmm: qemu},
-        ]
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-cri-ppc64le-${{ toJSON(matrix) }}
-      cancel-in-progress: true
-    uses: ./.github/workflows/run-cri-containerd-tests.yaml
-    with:
-      tarball-suffix: -${{ inputs.tag }}
-      commit-hash: ${{ inputs.commit-hash }}
-      target-branch: ${{ inputs.target-branch }}
-      runner: ppc64le-small
-      arch: ppc64le
-      containerd_version: ${{ matrix.params.containerd_version }}
-      vmm: ${{ matrix.params.vmm }}
+  # run-cri-containerd-tests-ppc64le:
+  #   if: ${{ inputs.skip-test != 'yes' }}
+  #   needs: build-kata-static-tarball-ppc64le
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       params: [
+  #         {containerd_version: latest, vmm: qemu},
+  #       ]
+  #   concurrency:
+  #     group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-cri-ppc64le-${{ toJSON(matrix) }}
+  #     cancel-in-progress: true
+  #   uses: ./.github/workflows/run-cri-containerd-tests.yaml
+  #   with:
+  #     tarball-suffix: -${{ inputs.tag }}
+  #     commit-hash: ${{ inputs.commit-hash }}
+  #     target-branch: ${{ inputs.target-branch }}
+  #     runner: ppc64le-small
+  #     arch: ppc64le
+  #     containerd_version: ${{ matrix.params.containerd_version }}
+  #     vmm: ${{ matrix.params.vmm }}
