@@ -39,8 +39,11 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       actions: write # needed to re-run the runs
-      issues: write # needed to answer the comment with a reaction
-      pull-requests: read # needed to read the pull request's head commit
+      # Write, and pull-requests rather than issues: the comment sits at an
+      # /issues/comments/ path, since that is where a pull request's
+      # conversation lives, but it is a pull request that owns it and it is this
+      # permission that governs it. issues: write is refused outright.
+      pull-requests: write # needed to react to the comment, and to read the head commit
       statuses: read # needed to follow the trusted lane's pointer to its run
     steps:
       - name: Check that the comment came from someone who may already do this
