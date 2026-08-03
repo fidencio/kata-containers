@@ -235,13 +235,22 @@ jobs:
 
       - name: Publish the images built by the untrusted lane
         env:
-          REGISTRY_OWNER: ${{ github.repository_owner }}
+          # TEMPORARY, sandbox only: github.repository, where upstream wants
+          # github.repository_owner. A token may only write a package its own
+          # repository owns, and ghcr.io/kata-containers/kata-deploy-ci belongs
+          # to kata-containers/kata-containers, so pushing it from here is
+          # denied - write_package - however much permission the workflow asks
+          # for. Naming the repository puts the package under this one instead,
+          # which the first push creates and links here. Upstream the lane runs
+          # in the repository that already owns the package and wants neither
+          # this nor the matching change on the suite below.
+          REGISTRY_PATH: ${{ github.repository }}
           IMAGE_TAG: ${{ needs.resolve.outputs.tag }}-amd64
         run: |
           set -o errexit -o nounset -o pipefail
 
           # ghcr.io accepts lowercase repository paths only.
-          owner="${REGISTRY_OWNER,,}"
+          path="${REGISTRY_PATH,,}"
 
           publish() {
             local archive="${1}"
@@ -252,8 +261,8 @@ jobs:
             # pull failure there instead of quietly passing. Here the tag has to
             # become one that does resolve.
             docker load --input "${ARCHIVE_DIR}/${archive}"
-            docker tag "localhost/${repo}:${IMAGE_TAG}" "ghcr.io/${owner}/${repo}:${IMAGE_TAG}"
-            docker push "ghcr.io/${owner}/${repo}:${IMAGE_TAG}"
+            docker tag "localhost/${repo}:${IMAGE_TAG}" "ghcr.io/${path}/${repo}:${IMAGE_TAG}"
+            docker push "ghcr.io/${path}/${repo}:${IMAGE_TAG}"
 
             # Reclaim the space as we go: the runner would otherwise have to
             # hold every archive plus every image loaded out of them at once.
@@ -327,7 +336,10 @@ jobs:
     with:
       tarball-suffix: ${{ needs.resolve.outputs.tarball-suffix }}
       registry: ghcr.io
-      repo: ${{ github.repository_owner }}/kata-deploy-ci
+      # TEMPORARY, sandbox only: the other half of the change in publish-images
+      # above - the images live under this repository's own package namespace
+      # here, so this is where the suite has to pull them from.
+      repo: ${{ github.repository }}/kata-deploy-ci
       tag: ${{ needs.resolve.outputs.tag }}-amd64
       # The base branch, not the pull request. The suite checks this out, so it
       # is what keeps the harness a reviewed one; the artifacts it exercises are
