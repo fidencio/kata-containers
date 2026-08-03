@@ -22,6 +22,12 @@ name: Kata Containers CI (trusted)
 # here; Gatekeeper requires the ok-to-test-prt lane for those instead. See
 # tools/testing/gatekeeper/required-tests.yaml.
 #
+# Neither property makes the lane free, though: it publishes binaries a fork
+# built under this repository's name, and runs them on clusters this repository
+# pays for. So the lane only runs on a pull request labelled ok-to-test, and
+# leaves its status pending until then. Adding the label later does not start
+# it - nothing re-fires workflow_run - which is what /retest is for.
+#
 # Because a workflow_run run is attributed to the default branch rather than to
 # the pull request, none of this shows up on the PR of its own accord. The lane
 # therefore posts a commit status on the pull request's head commit pointing at
@@ -58,7 +64,10 @@ jobs:
       pull-requests: read # needed to find the pull request behind the run
       statuses: write # needed to point the pull request at this run
     outputs:
-      stale: ${{ steps.pr.outputs.stale }}
+      # found: there is a pull request at this commit, so there is something to
+      # post a status on. proceed: it is also cleared to run.
+      found: ${{ steps.pr.outputs.found }}
+      proceed: ${{ steps.pr.outputs.proceed }}
       pr-number: ${{ steps.pr.outputs.pr-number }}
       tag: ${{ steps.pr.outputs.tag }}
       tarball-suffix: ${{ steps.pr.outputs.tarball-suffix }}
@@ -71,6 +80,10 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # Keep in step with the set that lists this lane's checks in
+          # tools/testing/gatekeeper/required-tests.yaml: the label that lets
+          # the lane run has to be the label Gatekeeper requires it for.
+          REQUIRED_LABEL: ok-to-test
         run: |
           set -o errexit -o nounset -o pipefail
 
@@ -93,17 +106,39 @@ jobs:
 
           if [[ -z "${pr}" ]]; then
             echo "::notice::No open pull request has ${HEAD_BRANCH} of ${HEAD_REPO} at ${HEAD_SHA}, so it was most likely superseded. Nothing to test."
-            echo "stale=true" >> "${GITHUB_OUTPUT}"
+            {
+              echo "found=false"
+              echo "proceed=false"
+            } >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           number="$(jq -r '.number' <<< "${pr}")"
           base="$(jq -r '.base.ref' <<< "${pr}")"
 
+          # The lane runs the base branch's harness, so a fork cannot steer what
+          # runs here - but it does hand this lane binaries it built, which are
+          # then published under this repository's name and run on a cluster
+          # this repository pays for. That is worth a maintainer's nod, and the
+          # label is where it is recorded: a label survives new pushes, and
+          # Gatekeeper reads the same one to decide whether to require these
+          # checks at all.
+          #
+          # The status below is posted either way, so that the lane can be
+          # pointed at once the label arrives - see .github/workflows/retest.yaml.
+          if jq -e --arg want "${REQUIRED_LABEL}" \
+              'any(.labels[]?.name; . == $want)' <<< "${pr}" > /dev/null; then
+            proceed=true
+          else
+            echo "::notice::Pull request ${number} is not labelled ${REQUIRED_LABEL}, so the trusted lane will not run. A maintainer can label it and comment /retest."
+            proceed=false
+          fi
+
           # Every artifact of the untrusted run is named after this pair, so
           # both lanes arrive at the same names without passing any along.
           {
-            echo "stale=false"
+            echo "found=true"
+            echo "proceed=${proceed}"
             echo "pr-number=${number}"
             echo "tag=${number}-${HEAD_SHA}"
             echo "tarball-suffix=-${number}-${HEAD_SHA}"
@@ -111,23 +146,29 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Point the pull request at this run
-        if: ${{ steps.pr.outputs.stale == 'false' }}
+        if: ${{ steps.pr.outputs.found == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DESCRIPTION: ${{ steps.pr.outputs.proceed == 'true' && 'Collecting the results of the trusted lane' || 'Waiting for a maintainer to add the ok-to-test label' }}
         run: |
           set -o errexit -o nounset -o pipefail
 
           # This status is the only thing tying the lane to the pull request:
-          # Gatekeeper reads it to learn which run to collect results from. It
-          # matches the context literally, so the two have to be kept in step.
+          # Gatekeeper reads it to learn which run to collect results from, and
+          # /retest reads it to learn which run to start over. It matches the
+          # context literally, so the three have to be kept in step.
+          #
+          # An unauthorised lane gets one too, and leaves it pending: that is
+          # what lets /retest find the run to re-run once the label is added,
+          # and pending is what the lane in fact is until then.
           gh api "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
             --method POST \
             --field state=pending \
             --field context='Trusted CI lane' \
             --field target_url="${RUN_URL}" \
-            --field description='Collecting the results of the trusted lane'
+            --field description="${DESCRIPTION}"
 
   # The lane is triggered when the untrusted run starts, not when it finishes,
   # so that the wait below is only for the artifacts it needs rather than for
@@ -136,7 +177,7 @@ jobs:
   wait-for-artifacts:
     name: wait-for-artifacts
     needs: [resolve]
-    if: ${{ needs.resolve.outputs.stale == 'false' }}
+    if: ${{ needs.resolve.outputs.proceed == 'true' }}
     runs-on: ubuntu-22.04
     permissions:
       actions: read # needed to read the untrusted run and its artifacts
@@ -200,7 +241,7 @@ jobs:
   publish-images:
     name: publish-images
     needs: [resolve, wait-for-artifacts]
-    if: ${{ needs.resolve.outputs.stale == 'false' }}
+    if: ${{ needs.resolve.outputs.proceed == 'true' }}
     runs-on: ubuntu-22.04
     permissions:
       actions: read # needed to fetch the untrusted run's artifacts
@@ -293,7 +334,7 @@ jobs:
   restage-artifacts:
     name: restage-artifacts
     needs: [resolve, wait-for-artifacts]
-    if: ${{ needs.resolve.outputs.stale == 'false' }}
+    if: ${{ needs.resolve.outputs.proceed == 'true' }}
     runs-on: ubuntu-22.04
     permissions:
       actions: read # needed to fetch the untrusted run's artifacts
@@ -328,9 +369,9 @@ jobs:
   # credentials the untrusted lane will never hold.
   run-k8s-tests-on-aks:
     needs: [resolve, publish-images, restage-artifacts]
-    if: ${{ needs.resolve.outputs.stale == 'false' }}
+    if: ${{ needs.resolve.outputs.proceed == 'true' }}
     permissions:
-      contents: read
+      contents: read # needed by the suite to check out the harness
       id-token: write # needed for OIDC access to log into Azure
     uses: ./.github/workflows/run-k8s-tests-on-aks.yaml
     with:
@@ -358,10 +399,10 @@ jobs:
     needs: [resolve, wait-for-artifacts, publish-images, restage-artifacts, run-k8s-tests-on-aks]
     # always(), so that a failing suite still resolves the pending status the
     # resolve job left on the pull request.
-    if: ${{ always() && needs.resolve.result == 'success' && needs.resolve.outputs.stale == 'false' }}
+    if: ${{ always() && needs.resolve.outputs.proceed == 'true' }}
     runs-on: ubuntu-22.04
     permissions:
-      statuses: write
+      statuses: write # needed to resolve the status the resolve job left pending
     steps:
       - name: Report the lane's outcome on the pull request
         env:

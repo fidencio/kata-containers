@@ -21,7 +21,7 @@ paths:
   # a pull request's changes to them go unexercised unless the
   # pull_request_target lane runs, that being the one lane that runs a pull
   # request's own code.
-  - "^\\.github/workflows/": ["test", "test-prt"]
+  - "^\\.github/workflows/": ["test", "test-trusted", "test-prt"]
   - "^docs/": ["static"]
   - "^mkdocs\\.yaml$": ["static"]
   - "\\.md$": ["static"]
@@ -49,10 +49,9 @@ mapping:
   test:
     # Checks the basic functional tests work.
     #
-    # Nothing here waits on a label. The untrusted lane runs on every push to
-    # every pull request, fork or not, and the trusted lane it triggers runs the
-    # base branch's harness against that lane's artifacts, so neither one has a
-    # fork's code to be trusted with.
+    # Nothing here waits on a label, and nothing here needs to: the untrusted
+    # lane runs on every push to every pull request, fork or not, on runners
+    # GitHub hands out for free and with no secret and no registry within reach.
     names:
       # ci-on-push.yaml, the untrusted lane
       - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (latest, clh)
@@ -100,12 +99,26 @@ mapping:
       # - Kata Containers CI (GitHub-hosted runners) / run-kata-deploy-tests / run-kata-deploy-tests (qemu, k3s)
       - Kata Containers CI (GitHub-hosted runners) / run-kata-deploy-tests / run-kata-deploy-tests (qemu, microk8s)
       - Kata Containers CI (GitHub-hosted runners) / run-kata-deploy-tests / run-kata-deploy-tests (qemu, rke2)
+  test-trusted:
+    # The suites the untrusted lane cannot run, because they need a cluster that
+    # is not the runner itself and credentials to raise it.
+    #
+    # The lane runs the base branch's harness against the untrusted lane's
+    # artifacts, so a pull request cannot steer what runs. What it does do is
+    # publish binaries a fork built under this repository's name and run them on
+    # clusters this repository pays for, which is what the label is for. The
+    # lane reads the same label itself, so an unlabelled pull request neither
+    # runs these nor is asked for them - see
+    # .github/workflows/ci-on-push-trusted.yaml.
+    names:
       # ci-on-push-trusted.yaml, the trusted lane
       - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, normal)
       - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, containerd)
       - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, oci-distribution)
       - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, small)
       - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, normal)
+    required-labels:
+      - ok-to-test
   test-prt:
     # The suites that only the pull_request_target lane can run, each for one of
     # two reasons: they need a build on a self-hosted runner (s390x), or an image
