@@ -303,9 +303,36 @@ jobs:
           # here, not surface as a puzzling failure inside a suite.
           if-no-files-found: error
 
+  # The first suite to move. Its cluster is in Azure, so it cannot side-load an
+  # image the way the untrusted lane's suites do, and provisioning it needs
+  # credentials the untrusted lane will never hold.
+  run-k8s-tests-on-aks:
+    needs: [resolve, publish-images, restage-artifacts]
+    if: ${{ needs.resolve.outputs.stale == 'false' }}
+    permissions:
+      contents: read
+      id-token: write # needed for OIDC access to log into Azure
+    uses: ./.github/workflows/run-k8s-tests-on-aks.yaml
+    with:
+      tarball-suffix: ${{ needs.resolve.outputs.tarball-suffix }}
+      registry: ghcr.io
+      repo: ${{ github.repository_owner }}/kata-deploy-ci
+      tag: ${{ needs.resolve.outputs.tag }}-amd64
+      # The base branch, not the pull request. The suite checks this out, so it
+      # is what keeps the harness a reviewed one; the artifacts it exercises are
+      # still the pull request's. On a workflow_run, github.sha is the tip of the
+      # default branch.
+      commit-hash: ${{ github.sha }}
+      pr-number: ${{ needs.resolve.outputs.pr-number }}
+      target-branch: ${{ needs.resolve.outputs.target-branch }}
+    secrets:
+      AZ_APPID: ${{ secrets.AZ_APPID }}
+      AZ_TENANT_ID: ${{ secrets.AZ_TENANT_ID }}
+      AZ_SUBSCRIPTION_ID: ${{ secrets.AZ_SUBSCRIPTION_ID }}
+
   report:
     name: report
-    needs: [resolve, wait-for-artifacts, publish-images, restage-artifacts]
+    needs: [resolve, wait-for-artifacts, publish-images, restage-artifacts, run-k8s-tests-on-aks]
     # always(), so that a failing suite still resolves the pending status the
     # resolve job left on the pull request.
     if: ${{ always() && needs.resolve.result == 'success' && needs.resolve.outputs.stale == 'false' }}
