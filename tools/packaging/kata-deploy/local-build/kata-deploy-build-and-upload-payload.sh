@@ -30,6 +30,12 @@ else
 fi
 JOB_DISPATCHER_IMAGE_REFERENCE="${4:-${default_job_dispatcher_image_reference}}"
 
+# When set, the images are written to this directory as docker archives instead
+# of being pushed. It serves callers that have no registry to push to - notably
+# the pull_request CI lane, which runs a fork's code with a read-only token -
+# and which side-load the archives into their test cluster instead.
+IMAGE_TARBALL_DIR="${KATA_IMAGE_TARBALL_DIR:-}"
+
 KATA_DEPLOY_DIR="${REPO_ROOT}/tools/packaging/kata-deploy"
 ARTIFACTS_STAGE_DIR="${KATA_DEPLOY_DIR}/kata-artifacts"
 
@@ -49,8 +55,6 @@ pushd "${REPO_ROOT}"
 arch=$(uname -m)
 [[ "${arch}" = "x86_64" ]] && arch="amd64"
 [[ "${arch}" = "aarch64" ]] && arch="arm64"
-# Disable provenance and SBOM so each tag is a single image manifest. quay.io rejects
-# pushing multi-arch manifest lists that include attestation manifests ("manifest invalid").
 PLATFORM="linux/${arch}"
 COMMIT_TAG="kata-containers-$(git -C "${REPO_ROOT}" rev-parse HEAD)-${arch}"
 IMAGE_TAG="${REGISTRY}:${COMMIT_TAG}"
@@ -59,29 +63,46 @@ JOB_DISPATCHER_IMAGE_TAG="${JOB_DISPATCHER_IMAGE_REFERENCE}:${COMMIT_TAG}"
 DOCKERFILE="${REPO_ROOT}/tools/packaging/kata-deploy/Dockerfile"
 JOB_DISPATCHER_DOCKERFILE="${REPO_ROOT}/tools/packaging/kata-deploy/job-dispatcher/Dockerfile"
 
-echo "Building the kata-deploy image"
-docker buildx build --platform "${PLATFORM}" --provenance false --sbom false \
-	-f "${DOCKERFILE}" \
-	--tag "${IMAGE_TAG}" --push .
+# Build one image under every tag it was given, and either push it or write it
+# to a docker archive. One build covers all the tags either way: buildx pushes
+# each of them, and a docker archive carries a RepoTags list that
+# `ctr images import` registers in full.
+build_image() {
+	local dockerfile="${1}"
+	local archive="${2}"
+	shift 2
 
-echo "Building the kata-deploy-job-dispatcher image"
-docker buildx build --platform "${PLATFORM}" --provenance false --sbom false \
-	-f "${JOB_DISPATCHER_DOCKERFILE}" \
-	--tag "${JOB_DISPATCHER_IMAGE_TAG}" --push .
+	local build_args=()
+	local tag
+	for tag in "${@}"; do
+		build_args+=(--tag "${tag}")
+	done
 
+	if [[ -n "${IMAGE_TARBALL_DIR}" ]]; then
+		build_args+=(--output "type=docker,dest=${IMAGE_TARBALL_DIR}/${archive}")
+	else
+		build_args+=(--push)
+	fi
+
+	# Disable provenance and SBOM so each tag is a single image manifest. quay.io rejects
+	# pushing multi-arch manifest lists that include attestation manifests ("manifest invalid").
+	docker buildx build --platform "${PLATFORM}" --provenance false --sbom false \
+		-f "${dockerfile}" "${build_args[@]}" .
+}
+
+kata_deploy_tags=("${IMAGE_TAG}")
+job_dispatcher_tags=("${JOB_DISPATCHER_IMAGE_TAG}")
 if [[ -n "${TAG}" ]]; then
-	ADDITIONAL_TAG="${REGISTRY}:${TAG}"
-	JOB_DISPATCHER_ADDITIONAL_TAG="${JOB_DISPATCHER_IMAGE_REFERENCE}:${TAG}"
-
-	echo "Building the ${ADDITIONAL_TAG} image"
-	docker buildx build --platform "${PLATFORM}" --provenance false --sbom false \
-		-f "${DOCKERFILE}" \
-		--tag "${ADDITIONAL_TAG}" --push .
-
-	echo "Building the ${JOB_DISPATCHER_ADDITIONAL_TAG} image"
-	docker buildx build --platform "${PLATFORM}" --provenance false --sbom false \
-		-f "${JOB_DISPATCHER_DOCKERFILE}" \
-		--tag "${JOB_DISPATCHER_ADDITIONAL_TAG}" --push .
+	kata_deploy_tags+=("${REGISTRY}:${TAG}")
+	job_dispatcher_tags+=("${JOB_DISPATCHER_IMAGE_REFERENCE}:${TAG}")
 fi
+
+[[ -z "${IMAGE_TARBALL_DIR}" ]] || mkdir -p "${IMAGE_TARBALL_DIR}"
+
+echo "Building the kata-deploy image: ${kata_deploy_tags[*]}"
+build_image "${DOCKERFILE}" "kata-deploy.tar" "${kata_deploy_tags[@]}"
+
+echo "Building the kata-deploy-job-dispatcher image: ${job_dispatcher_tags[*]}"
+build_image "${JOB_DISPATCHER_DOCKERFILE}" "kata-deploy-job-dispatcher.tar" "${job_dispatcher_tags[@]}"
 
 popd

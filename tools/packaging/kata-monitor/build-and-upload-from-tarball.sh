@@ -57,9 +57,16 @@ fi
 
 chmod +x "${monitor_binary}"
 
-push_flag=()
-if [[ "${push_image}" == "true" ]]; then
-	push_flag+=(--push)
+# When KATA_IMAGE_TARBALL_DIR is set the image is written there as a docker
+# archive instead of being pushed, for callers that have no registry to push to -
+# notably the pull_request CI lane, which runs a fork's code with a read-only
+# token - and which side-load the archive into their test cluster instead.
+output_flag=()
+if [[ -n "${KATA_IMAGE_TARBALL_DIR:-}" ]]; then
+	mkdir -p "${KATA_IMAGE_TARBALL_DIR}"
+	output_flag+=(--output "type=docker,dest=${KATA_IMAGE_TARBALL_DIR}/kata-monitor.tar")
+elif [[ "${push_image}" == "true" ]]; then
+	output_flag+=(--push)
 fi
 
 docker buildx build \
@@ -67,5 +74,5 @@ docker buildx build \
 	--provenance false --sbom false \
 	-f "${repo_root_dir}/tools/packaging/kata-monitor/Dockerfile" \
 	--tag "${image_ref}" \
-	"${push_flag[@]}" \
+	"${output_flag[@]}" \
 	"${tmpdir}"
