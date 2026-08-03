@@ -90,7 +90,7 @@ jobs:
         with:
           name: k8s-tests-${{ matrix.vmm }}-${{ matrix.k8s }}-${{ inputs.tag }}
           path: /tmp/artifacts
-          retention-days: 1
+          retention-days: 7
 
       - name: Delete kata-deploy
         if: always()

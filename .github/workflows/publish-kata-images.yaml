@@ -259,8 +259,9 @@ jobs:
         with:
           name: ${{ inputs.image-tarball-artifact }}
           path: ${{ env.KATA_IMAGE_TARBALL_DIR }}
-          # Only the test jobs of this same run consume these, and they are big.
-          retention-days: 1
+          # These are big, but the trusted lane republishes them from here when
+          # it is re-run, so they have to outlive the day they were built.
+          retention-days: 7
           # The archives are made of already-compressed component tarballs, so
           # deflating them again costs minutes and saves close to nothing.
           compression-level: 0

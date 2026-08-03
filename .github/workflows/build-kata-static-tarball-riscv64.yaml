@@ -78,5 +78,5 @@ jobs:
         with:
           name: kata-artifacts-riscv64-${{ matrix.asset }}${{ inputs.tarball-suffix }}
           path: kata-build/kata-static-${{ matrix.asset }}.tar.zst
-          retention-days: 3
+          retention-days: 7
           if-no-files-found: error

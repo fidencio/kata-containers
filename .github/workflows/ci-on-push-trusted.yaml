@@ -313,9 +313,9 @@ jobs:
           # Named file rather than the directory, so the artifact keeps the shape
           # the build gave it and a suite finds what it expects at the top.
           path: restaged/kata-tools-static.tar.zst
-          # Nothing outside this run reads it, and the build's own copy is the
-          # one worth keeping around.
-          retention-days: 1
+          # Nothing outside this run reads it, but a re-run of a suite days
+          # later is one of the things this run is re-run for, and it reads it.
+          retention-days: 7
           # Already-compressed tarball; deflating it again costs time and saves
           # close to nothing.
           compression-level: 0

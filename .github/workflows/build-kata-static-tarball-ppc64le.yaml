@@ -91,7 +91,7 @@ jobs:
         with:
           name: kata-artifacts-ppc64le-${{ matrix.asset }}${{ inputs.tarball-suffix }}
           path: kata-build/kata-static-${{ matrix.asset }}.tar.zst
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: error
 
   build-kata-deploy-components:
@@ -132,7 +132,7 @@ jobs:
         with:
           name: kata-artifacts-ppc64le-${{ matrix.component }}${{ inputs.tarball-suffix }}
           path: kata-deploy-build/kata-deploy-static-${{ matrix.component }}.tar.zst
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: error
 
   build-asset-rootfs:
@@ -201,7 +201,7 @@ jobs:
         with:
           name: kata-artifacts-ppc64le-${{ matrix.asset }}${{ inputs.tarball-suffix }}
           path: kata-build/kata-static-${{ matrix.asset }}.tar.zst
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: error
 
   # We don't need the binaries installed in the rootfs as part of the release tarball, so can delete them now we've built the rootfs
@@ -287,7 +287,7 @@ jobs:
         with:
           name: kata-artifacts-ppc64le-${{ matrix.asset }}${{ inputs.tarball-suffix }}
           path: kata-build/kata-static-${{ matrix.asset }}.tar.zst
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: error
 
   create-kata-tarball:
@@ -340,5 +340,5 @@ jobs:
         with:
           name: kata-go-static-tarball-ppc64le${{ inputs.tarball-suffix }}
           path: kata-go-static.tar.zst
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: error

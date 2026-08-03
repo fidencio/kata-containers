@@ -308,7 +308,7 @@ jobs:
         with:
           name: nerdctl-tests-garm-${{ matrix.vmm }}
           path: /tmp/artifacts
-          retention-days: 1
+          retention-days: 7
 
   run-kata-agent-apis:
     name: run-kata-agent-apis
