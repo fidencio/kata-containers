@@ -1,0 +1,66 @@
+name: Resolve the kernel-module signing pin
+description: >
+  Resolves the pin used to sign NVIDIA GPU driver kernel modules, so that they
+  are signed in every run and not only in the runs that can read repository
+  secrets.
+
+inputs:
+  pin:
+    description: >
+      The project's persistent pin. Callers that hold no secrets, such as the
+      pull_request lane, leave this empty and get an ephemeral pin instead.
+    required: false
+    default: ""
+
+outputs:
+  pin:
+    description: The value to pass to the build as KBUILD_SIGN_PIN.
+    value: ${{ steps.resolve.outputs.pin }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve KBUILD_SIGN_PIN
+      id: resolve
+      shell: bash
+      env:
+        PERSISTENT_PIN: ${{ inputs.pin }}
+      run: |
+        set -o errexit -o nounset -o pipefail
+
+        # KBUILD_SIGN_PIN does two things: it turns on CONFIG_MODULE_SIG_FORCE,
+        # and it encrypts the certs/signing_key.pem that the kernel build
+        # generates for itself. It is a passphrase for a per-build key, not a
+        # key, so a run that cannot read the persistent pin can make up its own
+        # and still exercise the signing path, instead of silently building a
+        # kernel that loads modules unchecked.
+        #
+        # The pin has to be identical in every job of the run, because the job
+        # that builds the kernel encrypts the key and the job that builds the
+        # out-of-tree modules has to sign with that same key; a mismatch shows
+        # up at boot as "Loading of module with unavailable key is rejected".
+        # Deriving it from the run identity gives every job the same value
+        # without passing it between them, which would mean either putting it
+        # in a job output, where GitHub redacts masked values, or in an
+        # artifact, which is world-readable on a public repository.
+        #
+        # Releases keep using the persistent pin. Their kernel tarballs ship to
+        # users, so the key inside has to stay encrypted with something that a
+        # reader of the public build log cannot reproduce.
+        pin="${PERSISTENT_PIN}"
+        if [[ -z "${pin}" ]]; then
+          pin="$(printf '%s' "${GITHUB_REPOSITORY}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" |
+            sha256sum | cut -d ' ' -f 1)"
+          echo "Using an ephemeral, run-scoped module-signing pin."
+        else
+          echo "Using the persistent module-signing pin."
+        fi
+
+        # A newline would let the value forge further step outputs.
+        if [[ "${pin}" == *$'\n'* ]]; then
+          echo "The module-signing pin must be a single line." >&2
+          exit 1
+        fi
+
+        echo "::add-mask::${pin}"
+        echo "pin=${pin}" >> "${GITHUB_OUTPUT}"

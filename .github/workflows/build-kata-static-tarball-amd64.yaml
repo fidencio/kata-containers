@@ -23,8 +23,11 @@ on:
     secrets:
       QUAY_DEPLOYER_PASSWORD:
         required: false
+      # Optional so that callers holding no secrets, such as the pull_request
+      # lane in ci-on-push.yaml, can build too. Those runs sign the NVIDIA GPU
+      # driver modules with an ephemeral pin instead.
       KBUILD_SIGN_PIN:
-        required: true
+        required: false
 
 permissions: {}
 
@@ -90,6 +93,13 @@ jobs:
         env:
           TARGET_BRANCH: ${{ inputs.target-branch }}
 
+      - name: Resolve the kernel-module signing pin
+        id: sign-pin
+        if: ${{ contains(matrix.asset, 'nvidia') }}
+        uses: ./.github/actions/kbuild-sign-pin
+        with:
+          pin: ${{ secrets.KBUILD_SIGN_PIN }}
+
       - name: Build ${{ matrix.asset }}
         id: build
         run: |
@@ -106,7 +116,9 @@ jobs:
           ARTEFACT_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           TARGET_BRANCH: ${{ inputs.target-branch }}
           RELEASE: ${{ inputs.stage == 'release' && 'yes' || 'no' }}
-          KBUILD_SIGN_PIN: ${{ contains(matrix.asset, 'nvidia') && secrets.KBUILD_SIGN_PIN || '' }}
+          # Empty for non-NVIDIA assets, which therefore build without
+          # module signature enforcement.
+          KBUILD_SIGN_PIN: ${{ steps.sign-pin.outputs.pin }}
           USE_DEVMAPPER: ${{ matrix.asset == 'agent' && 'yes' || 'no' }}
           GH_TOKEN: ${{ github.token }}
           VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
@@ -251,6 +263,13 @@ jobs:
           path: kata-artifacts
           merge-multiple: true
 
+      - name: Resolve the kernel-module signing pin
+        id: sign-pin
+        if: ${{ contains(matrix.asset, 'nvidia') }}
+        uses: ./.github/actions/kbuild-sign-pin
+        with:
+          pin: ${{ secrets.KBUILD_SIGN_PIN }}
+
       - name: Build ${{ matrix.asset }}
         id: build
         run: |
@@ -268,7 +287,9 @@ jobs:
           ARTEFACT_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           TARGET_BRANCH: ${{ inputs.target-branch }}
           RELEASE: ${{ inputs.stage == 'release' && 'yes' || 'no' }}
-          KBUILD_SIGN_PIN: ${{ contains(matrix.asset, 'nvidia') && secrets.KBUILD_SIGN_PIN || '' }}
+          # Empty for non-NVIDIA assets, which therefore build without
+          # module signature enforcement.
+          KBUILD_SIGN_PIN: ${{ steps.sign-pin.outputs.pin }}
           # Used to verify the guest-components CoCo extension provenance.
           GH_TOKEN: ${{ github.token }}
           VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
