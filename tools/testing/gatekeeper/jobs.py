@@ -38,6 +38,12 @@ if os.environ.get("GITHUB_TOKEN"):
     _GH_HEADERS["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
 _GH_API_URL = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}"
 _GH_RUNS_URL = f"{_GH_API_URL}/actions/runs"
+# A lane that is not triggered by the pull request cannot be found by the head
+# SHA (see get_pointed_at_runs), so it announces itself with a commit status
+# under this context. Keep it in step with the trusted lane's workflow,
+# .github/workflows/ci-on-push-trusted.yaml.
+_POINTER_CONTEXT = "Trusted CI lane"
+_POINTER_RUN_ID = re.compile(r"/actions/runs/(\d+)")
 _GH_SUMMARY_URL = (
     f"{os.environ.get('GITHUB_SERVER_URL')}/"
     f"{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/"
@@ -256,6 +262,48 @@ class Checker:
         return self.paginated_fetch(
             url, "jobs", f"get_jobs_for_workflow_run__{run_id}")
 
+    def get_pointed_at_runs(self, attempt):
+        """
+        Get the runs that a commit status points this commit at.
+
+        A workflow_run-triggered run is attributed to the default branch rather
+        than to the pull request, so no amount of asking for the head SHA finds
+        it. Those lanes post a commit status on the pull request's head commit
+        whose target_url is their own run, and this follows it.
+
+        Only a token with write access can post a commit status, which a fork's
+        pull_request never gets, so the pointer cannot come from the code under
+        test. The run id is all that is taken from the URL, and it is then
+        looked up in this repository, so a bogus target_url leads nowhere else.
+
+        :returns: List of workflow runs
+        """
+        # This endpoint answers with a bare list rather than a counted object,
+        # so it cannot go through paginated_fetch.
+        statuses = self.fetch_json_from_url(
+            f"{_GH_API_URL}/commits/{self.latest_commit_sha}/statuses",
+            f"get_pointed_at_runs_{attempt}", {"per_page": 100})
+        runs = []
+        seen = set()
+        for status in statuses:
+            if status.get("context") != _POINTER_CONTEXT:
+                continue
+            match = _POINTER_RUN_ID.search(status.get("target_url") or "")
+            if not match:
+                continue
+            run_id = match.group(1)
+            if run_id in seen:
+                # The same run posts its status more than once, moving from
+                # pending to whatever it concluded as.
+                continue
+            seen.add(run_id)
+            print(f"following {_POINTER_CONTEXT} to run {run_id}",
+                  file=sys.stderr)
+            runs.append(self.fetch_json_from_url(
+                f"{_GH_RUNS_URL}/{run_id}",
+                f"get_pointed_at_runs_{attempt}_{run_id}"))
+        return runs
+
     def check_workflow_runs_status(self, attempt):
         """
         Checks if all required jobs passed
@@ -266,6 +314,7 @@ class Checker:
             _GH_RUNS_URL, "workflow_runs",
             f"check_workflow_runs_status_{attempt}",
             {"head_sha": self.latest_commit_sha})
+        workflow_runs += self.get_pointed_at_runs(attempt)
         for run in workflow_runs:
             jobs = self.get_jobs_for_workflow_run(run["id"])
             for job in jobs:
