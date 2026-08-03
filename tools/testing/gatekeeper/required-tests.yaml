@@ -16,7 +16,12 @@ paths:
   # CI
   - "^ci/openshift-ci/": []
   - "^\\.github/workflows/static-checks": ["static"]
-  - "^\\.github/workflows/": []
+  # A change to a workflow used to require nothing at all, which the trusted
+  # lane makes untenable: it resolves its workflows from the default branch, so
+  # a pull request's changes to them go unexercised unless the
+  # pull_request_target lane runs, that being the one lane that runs a pull
+  # request's own code.
+  - "^\\.github/workflows/": ["test", "test-prt"]
   - "^docs/": ["static"]
   - "^mkdocs\\.yaml$": ["static"]
   - "\\.md$": ["static"]
@@ -42,70 +47,92 @@ mapping:
   #       (eg. "build" is required for "test")
   # TODO: Add support for "ignore:" to remove individual tests from regexps
   test:
-    # Checks the basic functional tests work
+    # Checks the basic functional tests work.
+    #
+    # Nothing here waits on a label. The untrusted lane runs on every push to
+    # every pull request, fork or not, and the trusted lane it triggers runs the
+    # base branch's harness against that lane's artifacts, so neither one has a
+    # fork's code to be trusted with.
     names:
-      # ci-on-push.yaml (ci.yaml)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-containerd-stability (latest, clh)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-containerd-stability (latest, clh-runtime-rs)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-containerd-stability (latest, dragonball)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-containerd-stability (latest, qemu)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-containerd-stability (latest, qemu-runtime-rs)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-containerd-stability (minimum, clh)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-containerd-stability (minimum, clh-runtime-rs)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-containerd-stability (minimum, dragonball)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-containerd-stability (minimum, qemu)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-containerd-stability (minimum, qemu-runtime-rs)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-kata-agent-apis
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-nerdctl-tests (clh-runtime-rs)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-nerdctl-tests (dragonball)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-nerdctl-tests (qemu)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-nerdctl-tests (qemu-runtime-rs)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-nydus (latest, clh)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-nydus (latest, dragonball)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-nydus (latest, qemu)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-nydus (minimum, clh)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-nydus (minimum, dragonball)
-      - Kata Containers CI / kata-containers-ci-on-push / run-basic-amd64-tests / run-nydus (minimum, qemu)
-      - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-amd64 (latest, clh-runtime-rs) / run-cri-containerd-amd64 (latest, clh-runtime-rs)
-      - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-amd64 (latest, clh) / run-cri-containerd-amd64 (latest, clh)
-      - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-amd64 (latest, dragonball) / run-cri-containerd-amd64 (latest, dragonball)
-      - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-amd64 (latest, qemu-runtime-rs) / run-cri-containerd-amd64 (latest, qemu-runtime-rs)
-      - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-amd64 (latest, qemu) / run-cri-containerd-amd64 (latest, qemu)
-      - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-amd64 (minimum, clh) / run-cri-containerd-amd64 (minimum, clh)
-      - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-amd64 (minimum, clh-runtime-rs) / run-cri-containerd-amd64 (minimum, clh-runtime-rs)
-      - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-amd64 (minimum, dragonball) / run-cri-containerd-amd64 (minimum, dragonball)
-      - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-amd64 (minimum, qemu-runtime-rs) / run-cri-containerd-amd64 (minimum, qemu-runtime-rs)
-      - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-amd64 (minimum, qemu) / run-cri-containerd-amd64 (minimum, qemu)
+      # ci-on-push.yaml, the untrusted lane
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (latest, clh)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (latest, clh-runtime-rs)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (latest, dragonball)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (latest, qemu)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (latest, qemu-runtime-rs)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (minimum, clh)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (minimum, clh-runtime-rs)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (minimum, dragonball)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (minimum, qemu)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-containerd-stability (minimum, qemu-runtime-rs)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-kata-agent-apis
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-nerdctl-tests (clh-runtime-rs)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-nerdctl-tests (dragonball)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-nerdctl-tests (qemu)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-nerdctl-tests (qemu-runtime-rs)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-nydus (latest, clh)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-nydus (latest, dragonball)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-nydus (latest, qemu)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-nydus (minimum, clh)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-nydus (minimum, dragonball)
+      - Kata Containers CI (GitHub-hosted runners) / run-basic-amd64-tests / run-nydus (minimum, qemu)
+      - Kata Containers CI (GitHub-hosted runners) / run-cri-containerd-tests-amd64 (latest, clh-runtime-rs) / run-cri-containerd-amd64 (latest, clh-runtime-rs)
+      - Kata Containers CI (GitHub-hosted runners) / run-cri-containerd-tests-amd64 (latest, clh) / run-cri-containerd-amd64 (latest, clh)
+      - Kata Containers CI (GitHub-hosted runners) / run-cri-containerd-tests-amd64 (latest, dragonball) / run-cri-containerd-amd64 (latest, dragonball)
+      - Kata Containers CI (GitHub-hosted runners) / run-cri-containerd-tests-amd64 (latest, qemu-runtime-rs) / run-cri-containerd-amd64 (latest, qemu-runtime-rs)
+      - Kata Containers CI (GitHub-hosted runners) / run-cri-containerd-tests-amd64 (latest, qemu) / run-cri-containerd-amd64 (latest, qemu)
+      - Kata Containers CI (GitHub-hosted runners) / run-cri-containerd-tests-amd64 (minimum, clh) / run-cri-containerd-amd64 (minimum, clh)
+      - Kata Containers CI (GitHub-hosted runners) / run-cri-containerd-tests-amd64 (minimum, clh-runtime-rs) / run-cri-containerd-amd64 (minimum, clh-runtime-rs)
+      - Kata Containers CI (GitHub-hosted runners) / run-cri-containerd-tests-amd64 (minimum, dragonball) / run-cri-containerd-amd64 (minimum, dragonball)
+      - Kata Containers CI (GitHub-hosted runners) / run-cri-containerd-tests-amd64 (minimum, qemu-runtime-rs) / run-cri-containerd-amd64 (minimum, qemu-runtime-rs)
+      - Kata Containers CI (GitHub-hosted runners) / run-cri-containerd-tests-amd64 (minimum, qemu) / run-cri-containerd-amd64 (minimum, qemu)
+      - Kata Containers CI (GitHub-hosted runners) / run-k8s-tests-on-free-runner / run-k8s-tests (clh, minimum)
+      - Kata Containers CI (GitHub-hosted runners) / run-k8s-tests-on-free-runner / run-k8s-tests (clh, latest)
+      - Kata Containers CI (GitHub-hosted runners) / run-k8s-tests-on-free-runner / run-k8s-tests (dragonball, minimum)
+      - Kata Containers CI (GitHub-hosted runners) / run-k8s-tests-on-free-runner / run-k8s-tests (dragonball, latest)
+      - Kata Containers CI (GitHub-hosted runners) / run-k8s-tests-on-free-runner / run-k8s-tests (qemu, minimum)
+      - Kata Containers CI (GitHub-hosted runners) / run-k8s-tests-on-free-runner / run-k8s-tests (qemu, latest)
+      - Kata Containers CI (GitHub-hosted runners) / run-k8s-tests-on-free-runner / run-k8s-tests (qemu-runtime-rs, minimum)
+      - Kata Containers CI (GitHub-hosted runners) / run-k8s-tests-on-free-runner / run-k8s-tests (qemu-runtime-rs, latest)
+      - Kata Containers CI (GitHub-hosted runners) / run-k8s-tests-on-free-runner / run-k8s-tests (clh-runtime-rs, minimum)
+      - Kata Containers CI (GitHub-hosted runners) / run-k8s-tests-on-free-runner / run-k8s-tests (clh-runtime-rs, latest)
+      - Kata Containers CI (GitHub-hosted runners) / run-kata-deploy-tests / run-kata-deploy-tests (qemu, k0s)
+      # - Kata Containers CI (GitHub-hosted runners) / run-kata-deploy-tests / run-kata-deploy-tests (qemu, k3s)
+      - Kata Containers CI (GitHub-hosted runners) / run-kata-deploy-tests / run-kata-deploy-tests (qemu, microk8s)
+      - Kata Containers CI (GitHub-hosted runners) / run-kata-deploy-tests / run-kata-deploy-tests (qemu, rke2)
+      # ci-on-push-trusted.yaml, the trusted lane
+      - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, normal)
+      - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, containerd)
+      - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, oci-distribution)
+      - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, small)
+      - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, normal)
+  test-prt:
+    # The suites that only the pull_request_target lane can run, each for one of
+    # two reasons: they need a build on a self-hosted runner (s390x), or an image
+    # that lane is still the only one to publish (the confidential guest image,
+    # the NVIDIA ones). Moving a suite out of here is what shrinks that lane.
+    #
+    # This set is also what covers a pull request's own harness. The trusted
+    # lane deliberately runs the base branch's tests/, so a change to the
+    # harness is only ever exercised by the lane that runs the pull request's
+    # code. tests/ matches no rule under paths above and so requires every set,
+    # this one included; that is worth leaving alone, and it is why the
+    # workflows now ask for this set explicitly.
+    names:
+      # ci-on-push-prt.yaml (ci.yaml)
       - Kata Containers CI / kata-containers-ci-on-push / run-cri-containerd-tests-s390x (latest, qemu) / run-cri-containerd-s390x (latest, qemu)
       #- Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-arm64 / run-k8s-tests-on-arm64 (qemu, kubeadm)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, normal)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, containerd)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, oci-distribution)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, small)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, normal)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-free-runner / run-k8s-tests (clh, minimum)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-free-runner / run-k8s-tests (clh, latest)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-free-runner / run-k8s-tests (dragonball, minimum)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-free-runner / run-k8s-tests (dragonball, latest)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-free-runner / run-k8s-tests (qemu, minimum)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-free-runner / run-k8s-tests (qemu, latest)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-free-runner / run-k8s-tests (qemu-runtime-rs, minimum)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-free-runner / run-k8s-tests (qemu-runtime-rs, latest)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-free-runner / run-k8s-tests (clh-runtime-rs, minimum)
-      - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-free-runner / run-k8s-tests (clh-runtime-rs, latest)
       - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-zvsi / run-k8s-tests (devmapper, qemu, kubeadm)
       - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-zvsi / run-k8s-tests (nydus, qemu-coco-dev, kubeadm)
       - Kata Containers CI / kata-containers-ci-on-push / run-kata-coco-tests / run-k8s-tests-on-tee (sev-snp, qemu-snp)
       - Kata Containers CI / kata-containers-ci-on-push / run-kata-coco-tests / run-k8s-tests-coco-nontee (qemu-coco-dev, nydus, guest-pull)
       - Kata Containers CI / kata-containers-ci-on-push / run-kata-coco-tests / run-k8s-tests-coco-nontee (qemu-coco-dev-runtime-rs, nydus, guest-pull)
-      - Kata Containers CI / kata-containers-ci-on-push / run-kata-deploy-tests / run-kata-deploy-tests (qemu, k0s)
-      # - Kata Containers CI / kata-containers-ci-on-push / run-kata-deploy-tests / run-kata-deploy-tests (qemu, k3s)
-      - Kata Containers CI / kata-containers-ci-on-push / run-kata-deploy-tests / run-kata-deploy-tests (qemu, microk8s)
-      - Kata Containers CI / kata-containers-ci-on-push / run-kata-deploy-tests / run-kata-deploy-tests (qemu, rke2)
       - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-nvidia-gpu / run-nvidia-gpu-tests-on-amd64
       # - Kata Containers CI / kata-containers-ci-on-push / run-k8s-tests-on-nvidia-gpu / run-nvidia-gpu-snp-tests-on-amd64
     required-labels:
-      - ok-to-test
+      # That lane runs a fork's code with every secret the repository holds, so
+      # it stays behind a maintainer having read the diff.
+      - ok-to-test-prt
   static:
     # Checks that static checks are passing
     names:
