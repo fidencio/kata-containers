@@ -165,6 +165,12 @@ jobs:
   run-k8s-tests-on-free-runner:
     needs: [skipper, build-kata-deploy-image-tarball-amd64]
     if: ${{ needs.skipper.outputs.skip_test != 'yes' }}
+    permissions:
+      # This suite is the one that asks for a permission of its own, so it is
+      # the one job here that has to be granted anything: a call that requests
+      # more than the caller was given is rejected before the run starts, and
+      # the workflow-level default above grants nothing.
+      contents: read
     uses: ./.github/workflows/run-k8s-tests-on-free-runner.yaml
     with:
       tarball-suffix: -${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
