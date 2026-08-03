@@ -69,19 +69,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -o errexit -o nounset -o pipefail
 
           # workflow_run hands us the commit but not the pull request: the
           # event's pull_requests list is always empty when the run came from a
-          # fork. So ask which pull request that commit heads, and accept only
-          # an answer that still agrees with the commit we were given, so that a
-          # rewritten branch cannot aim this run at a different pull request.
-          pr="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" \
-            --jq '[.[] | select(.state == "open" and .head.sha == env.HEAD_SHA)][0] // empty')"
+          # fork. The branch it came from is what identifies the pull request
+          # instead, and the run names both the fork and the branch.
+          #
+          # Asking which pull request a commit heads would be the obvious way
+          # and does not work: that endpoint only associates commits the
+          # repository itself holds, and a fork's are not among them, so it
+          # answers with nothing for exactly the pull requests this lane is for.
+          #
+          # The commit is still checked against the answer, so that a branch
+          # rewritten while this run was queued leaves the run superseded rather
+          # than aimed at a different commit than the one that was built.
+          pr="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=open&head=${HEAD_REPO%%/*}:${HEAD_BRANCH}" \
+            --jq '[.[] | select(.head.sha == env.HEAD_SHA)][0] // empty')"
 
           if [[ -z "${pr}" ]]; then
-            echo "::notice::No open pull request is headed by ${HEAD_SHA}, so it was most likely superseded. Nothing to test."
+            echo "::notice::No open pull request has ${HEAD_BRANCH} of ${HEAD_REPO} at ${HEAD_SHA}, so it was most likely superseded. Nothing to test."
             echo "stale=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
