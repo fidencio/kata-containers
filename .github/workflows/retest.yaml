@@ -1,0 +1,206 @@
+name: retest
+
+# A maintainer commenting /retest on a pull request re-runs whatever did not
+# pass, across every lane at once, without asking the author for a fresh push.
+#
+# It exists because there is no other way to get some of this going again. The
+# trusted lane is started by a workflow_run event that only fires when the
+# untrusted lane is first requested, so neither re-running the untrusted lane
+# nor adding the ok-to-test label to a pull request starts it; and Gatekeeper
+# only re-evaluates on pull request events, so a lane that goes green after a
+# re-run leaves Gatekeeper red until it is re-run too.
+#
+# issue_comment is privileged - it runs with this repository's secrets - and the
+# same two properties that make the trusted lane safe hold here: the workflow
+# file is always the default branch's, and nothing in it checks out the pull
+# request. The only thing taken from the comment is whether it begins with
+# /retest, decided in an expression; the body never reaches a shell.
+
+on:
+  # zizmor: ignore[dangerous-triggers]
+  # Privileged by design, and safe for the two reasons above.
+  issue_comment:
+    types:
+      - created
+
+permissions: {}
+
+concurrency:
+  # Not cancel-in-progress: this job re-runs other runs, and being killed
+  # halfway through leaves some lanes started and others not.
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+
+jobs:
+  retest:
+    name: retest
+    # An issue_comment fires for issues too, and github.event.issue.pull_request
+    # is the only thing in the payload that tells the two apart.
+    if: ${{ github.event.issue.pull_request && github.event.issue.state == 'open' && startsWith(github.event.comment.body, '/retest') }}
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: write # needed to re-run the runs
+      issues: write # needed to answer the comment with a reaction
+      pull-requests: read # needed to read the pull request's head commit
+      statuses: read # needed to follow the trusted lane's pointer to its run
+    steps:
+      - name: Check that the comment came from someone who may already do this
+        id: authorised
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          # GitHub works this out for us, which is the whole reason to use it:
+          # OWNER, MEMBER and COLLABORATOR are exactly the people who can
+          # already press "Re-run jobs" in the web interface, and no token this
+          # workflow could hold is able to read organisation membership.
+          AUTHORISED: ${{ contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) }}
+          ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          if [[ "${AUTHORISED}" != "true" ]]; then
+            # Not an error: people outside the project are welcome to ask, and
+            # the reaction is the answer. Failing here would only litter the
+            # actions tab with red runs nobody needs to look at.
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+              --method POST --field content='-1' > /dev/null
+            echo "::notice::Ignoring /retest from a ${ASSOCIATION}: only members and collaborators can re-run the CI."
+          fi
+
+          echo "authorised=${AUTHORISED}" >> "${GITHUB_OUTPUT}"
+
+      - name: Acknowledge the request
+        if: ${{ steps.authorised.outputs.authorised == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # Before the work rather than after it, so the comment stops looking
+          # unanswered while the runs are still being kicked off.
+          gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            --method POST --field content='rocket' > /dev/null
+
+      - name: Re-run everything that did not pass
+        if: ${{ steps.authorised.outputs.authorised == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          # Keep in step with the trusted lane and with
+          # tools/testing/gatekeeper/jobs.py: all three match this literally.
+          POINTER_CONTEXT: Trusted CI lane
+          # Re-run last, and only once the lanes it watches are moving again: it
+          # polls the runs it requires and gives up on the first failure it
+          # sees, so starting it first would just fail it again.
+          GATEKEEPER_WORKFLOW: Gatekeeper
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          echo "Pull request ${PR_NUMBER} is at ${head_sha}"
+
+          # Every lane the pull request triggers itself is found by its head
+          # commit. The trusted lane is not among them: a workflow_run run is
+          # attributed to the default branch, so it is found through the status
+          # it posts on the head commit instead, exactly as Gatekeeper finds it.
+          runs="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${head_sha}&per_page=100" \
+            --jq '.workflow_runs[] | [.id, .name, .status, .conclusion // "", ""] | @tsv')"
+
+          # Newest first, so the first status seen for a run is its current one.
+          # A run whose status is still pending never reached its report job:
+          # either it is running, or it stopped for want of the ok-to-test
+          # label, and the completed ones among those are what a /retest after
+          # labelling is meant to start.
+          pointed="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/statuses?per_page=100" \
+            --jq ".[] | select(.context == env.POINTER_CONTEXT) | [.state, .target_url] | @tsv" \
+            | awk -F'\t' '
+                match($2, /\/actions\/runs\/[0-9]+/) {
+                  id = substr($2, RSTART, RLENGTH)
+                  sub(/.*\//, "", id)
+                  if (!(id in seen)) { seen[id] = 1; print id "\t" $1 }
+                }')"
+
+          while read -r id state; do
+            [[ -n "${id:-}" ]] || continue
+            runs+=$'\n'"$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}" \
+              --jq "[.id, .name, .status, .conclusion // \"\", \"${state}\"] | @tsv")"
+          done <<< "${pointed}"
+
+          # Every lane the head commit carries is in here, static checks and
+          # spelling and CodeQL along with the test lanes, and each is judged the
+          # same way:
+          #
+          #   still running           - leave it alone, it has not failed yet
+          #   passed or skipped       - nothing to re-run
+          #   passed, pointer pending - the trusted lane that never ran; start it
+          #   has failed jobs         - re-run just those, and their dependents
+          #   anything else           - cancelled, timed out, failed to start:
+          #                             there is no failed job to aim at, so the
+          #                             whole run has to go again
+          rerun() {
+            local id="${1}" name="${2}" endpoint="${3}" what="${4}"
+
+            echo "::notice::${what} of ${name} (${id})"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/${endpoint}" \
+              --method POST > /dev/null
+            echo "* ${what}: [${name}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${id})" \
+              >> "${GITHUB_STEP_SUMMARY}"
+          }
+
+          consider() {
+            local id="${1}" name="${2}" status="${3}" conclusion="${4}" pointer="${5}"
+
+            if [[ "${status}" != "completed" ]]; then
+              echo "${name} (${id}) is ${status}, leaving it alone"
+              return
+            fi
+
+            # skipped and neutral are not failures: a lane whose paths filter or
+            # label left it out is meant to be left out, and re-running it would
+            # only skip it again. The pointer is what makes the exception, since
+            # a trusted lane that stopped for want of a label also concluded
+            # without a failure of any kind.
+            case "${conclusion}" in
+              success | skipped | neutral)
+                if [[ "${pointer}" != "pending" ]]; then
+                  echo "${name} (${id}) is ${conclusion}, nothing to do"
+                  return
+                fi
+                ;;
+            esac
+
+            local failed
+            failed="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.conclusion == "failure")] | length' \
+              | awk '{ total += $1 } END { print total + 0 }')"
+
+            if [[ "${failed}" -gt 0 ]]; then
+              rerun "${id}" "${name}" rerun-failed-jobs "Re-running ${failed} failed job(s)"
+            else
+              rerun "${id}" "${name}" rerun "Re-running every job"
+            fi
+          }
+
+          echo "## /retest" >> "${GITHUB_STEP_SUMMARY}"
+
+          gatekeeper=""
+          while IFS=$'\t' read -r id name status conclusion pointer; do
+            [[ -n "${id:-}" ]] || continue
+            if [[ "${name}" == "${GATEKEEPER_WORKFLOW}" ]]; then
+              gatekeeper="${id}"$'\t'"${status}"$'\t'"${conclusion}"$'\t'"${pointer}"
+              continue
+            fi
+            consider "${id}" "${name}" "${status}" "${conclusion}" "${pointer}"
+          done <<< "${runs}"
+
+          if [[ -n "${gatekeeper}" ]]; then
+            IFS=$'\t' read -r id status conclusion pointer <<< "${gatekeeper}"
+            # Long enough for the runs kicked off above to leave their previous
+            # conclusion behind, so that Gatekeeper waits for them rather than
+            # reading the failure it is being re-run because of.
+            sleep 30
+            consider "${id}" "${GATEKEEPER_WORKFLOW}" "${status}" "${conclusion}" "${pointer}"
+          fi
