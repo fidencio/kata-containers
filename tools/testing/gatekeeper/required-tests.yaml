@@ -18,14 +18,27 @@ paths:
   - "^\\.github/workflows/static-checks": ["static"]
   # A change to a workflow used to require nothing at all, which the trusted
   # lane makes untenable: it resolves its workflows from the default branch, so
-  # a pull request's changes to them go unexercised unless the
-  # pull_request_target lane runs, that being the one lane that runs a pull
-  # request's own code.
+  # a pull request's changes to them are exercised by the lanes that run the
+  # pull request's own workflow files, and not by that one. There is no fixing
+  # that from here - it is what workflow_run is - so the answer is to keep the
+  # trusted lane's own YAML thin and its logic in tests/, which it does check
+  # out from the pull request.
   - "^\\.github/workflows/": ["test", "test-trusted", "test-prt"]
   - "^docs/": ["static"]
   - "^mkdocs\\.yaml$": ["static"]
   - "\\.md$": ["static"]
   - "^tests/spellcheck/kata-dictionary.txt": ["static"]
+  # The harness, and last of the tests/ rules on purpose: the first pattern a
+  # file matches is the only one that counts, so anything narrower under tests/
+  # has to come above this.
+  #
+  # Both new lanes run the pull request's own tests/ - the untrusted one because
+  # that is all it ever runs, the trusted one at the very commit its artifacts
+  # were built from - so a change here is exercised by whichever lane covers the
+  # suite it touches, and needs nothing from pull_request_target. Until now this
+  # matched no rule at all and so required every set, this being the accident
+  # that covered the harness while the trusted lane still ran the base branch's.
+  - "^tests/": ["test", "test-trusted", "static"]
   - "^\\.claude/": []
   # TODO: Expand filters
   # Sources
@@ -103,12 +116,12 @@ mapping:
     # The suites the untrusted lane cannot run, because they need a cluster that
     # is not the runner itself and credentials to raise it.
     #
-    # The lane runs the base branch's harness against the untrusted lane's
-    # artifacts, so a pull request cannot steer what runs. What it does do is
-    # publish binaries a fork built under this repository's name and run them on
-    # clusters this repository pays for, which is what the label is for. The
-    # lane reads the same label itself, so an unlabelled pull request neither
-    # runs these nor is asked for them - see
+    # The lane builds nothing: it runs the pull request's tests/ against the
+    # artifacts the untrusted lane built, publishes those under this
+    # repository's name, and puts them on clusters this repository pays for.
+    # Which is what the label is for, and why it is the lane's boundary rather
+    # than a formality. The lane reads the same label itself, so an unlabelled
+    # pull request neither runs these nor is asked for them - see
     # .github/workflows/ci-on-push-trusted.yaml.
     names:
       # ci-on-push-trusted.yaml, the trusted lane
@@ -125,12 +138,11 @@ mapping:
     # that lane is still the only one to publish (the confidential guest image,
     # the NVIDIA ones). Moving a suite out of here is what shrinks that lane.
     #
-    # This set is also what covers a pull request's own harness. The trusted
-    # lane deliberately runs the base branch's tests/, so a change to the
-    # harness is only ever exercised by the lane that runs the pull request's
-    # code. tests/ matches no rule under paths above and so requires every set,
-    # this one included; that is worth leaving alone, and it is why the
-    # workflows now ask for this set explicitly.
+    # It no longer covers the harness: both new lanes run the pull request's own
+    # tests/, so a change there is exercised without this lane and ^tests/ above
+    # says so. What still brings this set in is a change to a workflow file,
+    # since the trusted lane's own YAML is always the default branch's and this
+    # is the only lane that runs a pull request's.
     # TEMPORARY, sandbox only: the whole set is silenced, names and label alike,
     # so that a run here is judged by the two new lanes and nothing else. Every
     # suite left in it needs a self-hosted runner - s390x, a TEE machine or a
