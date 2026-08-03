@@ -1,0 +1,155 @@
+name: Kata Containers CI (trusted)
+
+# The trusted lane of the CI. It is triggered by ci-on-push.yaml - the untrusted
+# pull_request lane - and picks up where that one has to stop: it holds the
+# repository secrets, so it can publish the images the untrusted lane could only
+# build into a docker archive, and run the suites that need a registry, AKS or a
+# self-hosted runner.
+#
+# Two properties are what make that safe, and both have to keep holding for
+# every job added here:
+#
+#   - The workflow code is always the default branch's. GitHub resolves
+#     workflow_run workflows from the default branch, so a pull request cannot
+#     change what this lane does.
+#   - The test harness is the base branch's too. Every suite checks out
+#     `inputs.commit-hash`, so passing github.sha - the default branch tip, on a
+#     workflow_run - runs base-branch tests/ against the pull request's
+#     artifacts. Nothing here checks out the fork, which is also why no
+#     actions/checkout in this lane needs allow-unsafe-pr-checkout.
+#
+# The cost of the second property is that changes to tests/ are not exercised
+# here; Gatekeeper requires the ok-to-test-prt lane for those instead. See
+# tools/testing/gatekeeper/required-tests.yaml.
+#
+# Because a workflow_run run is attributed to the default branch rather than to
+# the pull request, none of this shows up on the PR of its own accord. The lane
+# therefore posts a commit status on the pull request's head commit pointing at
+# its own run, and Gatekeeper follows that pointer to collect the results (see
+# tools/testing/gatekeeper/jobs.py).
+
+on:
+  # zizmor: ignore[dangerous-triggers]
+  # Privileged by design. It is safe for the two reasons above: the workflow
+  # code comes from the default branch, and no job checks out the pull request.
+  workflow_run:
+    workflows:
+      - Kata Containers CI (GitHub-hosted runners)
+    types:
+      - requested
+
+permissions: {}
+
+concurrency:
+  # The head SHA changes with every push, so grouping on it would leave
+  # superseded runs alive. The fork's branch is what stays constant for the life
+  # of the pull request.
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    name: resolve
+    # ci-on-push.yaml only runs on pull_request, but a run of it from any other
+    # event would carry none of the pull request context this lane needs.
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      pull-requests: read # needed to find the pull request behind the run
+      statuses: write # needed to point the pull request at this run
+    outputs:
+      stale: ${{ steps.pr.outputs.stale }}
+      pr-number: ${{ steps.pr.outputs.pr-number }}
+      tag: ${{ steps.pr.outputs.tag }}
+      tarball-suffix: ${{ steps.pr.outputs.tarball-suffix }}
+      target-branch: ${{ steps.pr.outputs.target-branch }}
+    steps:
+      - name: Resolve the pull request behind the untrusted run
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # workflow_run hands us the commit but not the pull request: the
+          # event's pull_requests list is always empty when the run came from a
+          # fork. So ask which pull request that commit heads, and accept only
+          # an answer that still agrees with the commit we were given, so that a
+          # rewritten branch cannot aim this run at a different pull request.
+          pr="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" \
+            --jq '[.[] | select(.state == "open" and .head.sha == env.HEAD_SHA)][0] // empty')"
+
+          if [[ -z "${pr}" ]]; then
+            echo "::notice::No open pull request is headed by ${HEAD_SHA}, so it was most likely superseded. Nothing to test."
+            echo "stale=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          number="$(jq -r '.number' <<< "${pr}")"
+          base="$(jq -r '.base.ref' <<< "${pr}")"
+
+          # Every artifact of the untrusted run is named after this pair, so
+          # both lanes arrive at the same names without passing any along.
+          {
+            echo "stale=false"
+            echo "pr-number=${number}"
+            echo "tag=${number}-${HEAD_SHA}"
+            echo "tarball-suffix=-${number}-${HEAD_SHA}"
+            echo "target-branch=${base}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Point the pull request at this run
+        if: ${{ steps.pr.outputs.stale == 'false' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # This status is the only thing tying the lane to the pull request:
+          # Gatekeeper reads it to learn which run to collect results from. It
+          # matches the context literally, so the two have to be kept in step.
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            --method POST \
+            --field state=pending \
+            --field context='Trusted CI lane' \
+            --field target_url="${RUN_URL}" \
+            --field description='Collecting the results of the trusted lane'
+
+  report:
+    name: report
+    needs: [resolve]
+    # always(), so that a failing suite still resolves the pending status the
+    # resolve job left on the pull request.
+    if: ${{ always() && needs.resolve.result == 'success' && needs.resolve.outputs.stale == 'false' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      statuses: write
+    steps:
+      - name: Report the lane's outcome on the pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # Only for the humans reading the pull request: Gatekeeper judges this
+          # lane by the jobs of this run, not by the state of this status.
+          state=success
+          for result in ${RESULTS}; do
+            case "${result}" in
+              success|skipped) ;;
+              *) state=failure ;;
+            esac
+          done
+
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            --method POST \
+            --field state="${state}" \
+            --field context='Trusted CI lane' \
+            --field target_url="${RUN_URL}" \
+            --field description="The trusted lane finished with: ${RESULTS}"
