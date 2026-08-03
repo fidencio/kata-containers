@@ -34,7 +34,12 @@ on:
         required: true
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-aks
+  # pr-number, rather than the event's pull request: it is required, it is set
+  # to "nightly" or "dev" by those lanes, and it is the only thing that tells
+  # one pull request from another in a lane that is not triggered by the pull
+  # request itself. github.event.pull_request is empty there, which would land
+  # every pull request in a single group, each cancelling the last.
+  group: ${{ github.workflow }}-${{ inputs.pr-number }}-aks
   cancel-in-progress: true
 
 permissions: {}
@@ -64,7 +69,7 @@ jobs:
             vmm: clh-azure-runtime-rs
             instance-type: normal
     concurrency:
-      group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-run-k8s-tests-aks-${{ toJSON(matrix) }}
+      group: ${{ github.workflow }}-${{ github.job }}-${{ inputs.pr-number }}-run-k8s-tests-aks-${{ toJSON(matrix) }}
       cancel-in-progress: true
     runs-on: ubuntu-22.04
     permissions:
