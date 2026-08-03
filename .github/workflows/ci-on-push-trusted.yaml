@@ -182,9 +182,88 @@ jobs:
             sleep 60
           done
 
+  # This is the whole point of the lane: the images exist, but only as docker
+  # archives, because the lane that built them holds no credentials to push
+  # them anywhere. Publishing them here is what puts them within reach of a
+  # cluster that is not the runner itself, an AKS one above all.
+  publish-images:
+    name: publish-images
+    needs: [resolve, wait-for-artifacts]
+    if: ${{ needs.resolve.outputs.stale == 'false' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read # needed to fetch the untrusted run's artifacts
+      packages: write # needed to push the images to ghcr.io
+    env:
+      ARCHIVE_DIR: /tmp/kata-image-tarballs
+    steps:
+      - name: get-kata-deploy-image-tarball
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: kata-deploy-image-tarball-amd64${{ needs.resolve.outputs.tarball-suffix }}
+          path: ${{ env.ARCHIVE_DIR }}
+          # Another run's artifacts, so this needs a token and the run to take
+          # them from; without both, the action looks inside this run instead.
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: get-kata-monitor-image-tarball
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: kata-monitor-image-tarball-amd64${{ needs.resolve.outputs.tarball-suffix }}
+          path: ${{ env.ARCHIVE_DIR }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Kata Containers ghcr.io
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the images built by the untrusted lane
+        env:
+          REGISTRY_OWNER: ${{ github.repository_owner }}
+          IMAGE_TAG: ${{ needs.resolve.outputs.tag }}-amd64
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # ghcr.io accepts lowercase repository paths only.
+          owner="${REGISTRY_OWNER,,}"
+
+          publish() {
+            local archive="${1}"
+            local repo="${2}"
+
+            # The untrusted lane tags for localhost, a registry that cannot
+            # serve the image, so that a side-load it failed to do surfaces as a
+            # pull failure there instead of quietly passing. Here the tag has to
+            # become one that does resolve.
+            docker load --input "${ARCHIVE_DIR}/${archive}"
+            docker tag "localhost/${repo}:${IMAGE_TAG}" "ghcr.io/${owner}/${repo}:${IMAGE_TAG}"
+            docker push "ghcr.io/${owner}/${repo}:${IMAGE_TAG}"
+
+            # Reclaim the space as we go: the runner would otherwise have to
+            # hold every archive plus every image loaded out of them at once.
+            rm -f "${ARCHIVE_DIR}/${archive}"
+          }
+
+          # kata-deploy runs the installation, and in job mode hands it to the
+          # dispatcher, so both are needed. The dispatcher's repository name is
+          # derived the way the build script and the helm chart derive it, with
+          # the "-ci" suffix kept last.
+          publish kata-deploy.tar kata-deploy-ci
+          publish kata-deploy-job-dispatcher.tar kata-deploy-job-dispatcher-ci
+
+          # Not needed by the suites here yet. It is published all the same, so
+          # that the kata-monitor suites can move over without the images
+          # arriving from two different lanes.
+          publish kata-monitor.tar kata-monitor-ci
+
   report:
     name: report
-    needs: [resolve, wait-for-artifacts]
+    needs: [resolve, wait-for-artifacts, publish-images]
     # always(), so that a failing suite still resolves the pending status the
     # resolve job left on the pull request.
     if: ${{ always() && needs.resolve.result == 'success' && needs.resolve.outputs.stale == 'false' }}
