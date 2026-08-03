@@ -60,9 +60,21 @@ on:
         required: false
         type: string
         default: "true"
+      image-tarball-artifact:
+        description: >
+          Artifact to upload the image(s) to as docker archives, instead of
+          pushing them to a registry. This is what lets a lane with no registry
+          credentials, such as a fork's pull_request, hand its images to the
+          tests. One artifact is uploaded per image kind, so pass `image-kind`
+          rather than `image-kinds-json` alongside this.
+        required: false
+        type: string
+        default: ""
     secrets:
       QUAY_DEPLOYER_PASSWORD:
-        required: true
+        # Not required: the tarball mode above pushes nowhere, so callers that
+        # hold no secrets can still build the images.
+        required: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.arch }}-${{ inputs.repo }}-${{ inputs.tag }}-${{ inputs.image-kind }}-publish-image
@@ -80,6 +92,10 @@ jobs:
     strategy:
       matrix:
         image-kind: ${{ fromJson(inputs.image-kinds-json != '' && inputs.image-kinds-json || format('["{0}"]', inputs.image-kind)) }}
+    env:
+      # Both build scripts read this: when it is set they write the images there
+      # as docker archives instead of pushing them.
+      KATA_IMAGE_TARBALL_DIR: ${{ inputs.image-tarball-artifact != '' && '/tmp/kata-image-tarballs' || '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -147,7 +163,7 @@ jobs:
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Login to Kata Containers quay.io
-        if: ${{ inputs.registry == 'quay.io' && inputs.push == 'true' }}
+        if: ${{ inputs.registry == 'quay.io' && inputs.push == 'true' && inputs.image-tarball-artifact == '' }}
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: quay.io
@@ -155,7 +171,7 @@ jobs:
           password: ${{ secrets.QUAY_DEPLOYER_PASSWORD }}
 
       - name: Login to Kata Containers ghcr.io
-        if: ${{ (inputs.registry == 'ghcr.io' || inputs.registry == 'quay.io') && inputs.push == 'true' }}
+        if: ${{ (inputs.registry == 'ghcr.io' || inputs.registry == 'quay.io') && inputs.push == 'true' && inputs.image-tarball-artifact == '' }}
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
@@ -171,7 +187,8 @@ jobs:
           TAGS: ${{ inputs.tags }}
           TAG_SUFFIX: ${{ inputs.tag-suffix }}
           IMAGE_KIND: ${{ matrix.image-kind }}
-          PUSH_IMAGE: ${{ inputs.push }}
+          # Writing a tarball rules out pushing, whatever the caller asked for.
+          PUSH_IMAGE: ${{ inputs.image-tarball-artifact == '' && inputs.push || 'false' }}
         run: |
           if [ "${TAGS}" != "" ]; then
             tags="${TAGS}"
@@ -181,12 +198,21 @@ jobs:
 
           case "${IMAGE_KIND}" in
             deploy)
-              for t in ${tags}; do
-                final_tag="${t}${TAG_SUFFIX}"
+              if [ -n "${KATA_IMAGE_TARBALL_DIR}" ]; then
+                # A single docker archive carries every tag of one build, so
+                # there is nothing to iterate over here: the script writes one
+                # archive tagged with both the commit tag and this one.
                 ./tools/packaging/kata-deploy/local-build/kata-deploy-build-and-upload-payload.sh \
                   "${REGISTRY}/${REPO}" \
-                  "${final_tag}"
-              done
+                  "${TAG}${TAG_SUFFIX}"
+              else
+                for t in ${tags}; do
+                  final_tag="${t}${TAG_SUFFIX}"
+                  ./tools/packaging/kata-deploy/local-build/kata-deploy-build-and-upload-payload.sh \
+                    "${REGISTRY}/${REPO}" \
+                    "${final_tag}"
+                done
+              fi
               ;;
             monitor)
               registries="${REGISTRY}"
@@ -226,3 +252,15 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Upload the ${{ matrix.image-kind }} image tarball
+        if: ${{ inputs.image-tarball-artifact != '' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.image-tarball-artifact }}
+          path: ${{ env.KATA_IMAGE_TARBALL_DIR }}
+          # Only the test jobs of this same run consume these, and they are big.
+          retention-days: 1
+          # The archives are made of already-compressed component tarballs, so
+          # deflating them again costs minutes and saves close to nothing.
+          compression-level: 0
