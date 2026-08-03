@@ -61,6 +61,7 @@ function main() {
     case "${action}" in
         create-cluster) create_cluster "kata-deploy" ;;
         deploy-k8s) deploy_k8s ;;
+        import-image-archives) import_image_archives "${2:-}" ;;
         install-bats) install_bats ;;
         install-kubectl) install_kubectl ;;
         get-cluster-credentials) get_cluster_credentials "kata-deploy" ;;

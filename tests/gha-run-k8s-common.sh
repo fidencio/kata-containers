@@ -38,6 +38,9 @@ HELM_EXPERIMENTAL_FORCE_GUEST_PULL="${HELM_EXPERIMENTAL_FORCE_GUEST_PULL:-}"
 HELM_VERIFY_DEPLOYMENT="${HELM_VERIFY_DEPLOYMENT:-false}"
 KATA_DEPLOY_WAIT_TIMEOUT="${KATA_DEPLOY_WAIT_TIMEOUT:-900}"
 KATA_HOST_OS="${KATA_HOST_OS:-}"
+# Directory of docker archives holding the images under test. When set, the
+# images come from there rather than from a registry: see import_image_archives().
+KATA_IMAGE_TARBALL_DIR="${KATA_IMAGE_TARBALL_DIR:-}"
 KUBERNETES="${KUBERNETES:-}"
 K8S_TEST_HOST_TYPE="${K8S_TEST_HOST_TYPE:-small}"
 TEST_CLUSTER_NAMESPACE="${TEST_CLUSTER_NAMESPACE:-}"
@@ -621,6 +624,54 @@ function deploy_k8s() {
 	echo "::endgroup::"
 }
 
+# Side-load container images from docker archives into the cluster's own image
+# store, for lanes that have no registry to pull them from: a fork's
+# pull_request CI cannot push to ghcr.io, so it hands the images to the tests as
+# a build artifact instead.
+#
+# Call this after deploy_k8s(), which is what installs the container runtime the
+# images are imported into.
+function import_image_archives() {
+	local archive_dir="${1:-${KATA_IMAGE_TARBALL_DIR:-}}"
+
+	[[ -n "${archive_dir}" ]] || die "No image archive directory given, and KATA_IMAGE_TARBALL_DIR is unset."
+	[[ -d "${archive_dir}" ]] || die "${archive_dir} is not a directory."
+
+	# Each distribution ships its own containerd, reachable only through its own
+	# socket, so the plain host ctr would import into a store no kubelet reads.
+	# The k8s.io namespace is the one the CRI plugin looks images up in; ctr
+	# defaults to "default" instead.
+	local ctr_cmd
+	case "${KUBERNETES}" in
+		vanilla) ctr_cmd=(ctr) ;;
+		k0s) ctr_cmd=(k0s ctr) ;;
+		k3s) ctr_cmd=(k3s ctr) ;;
+		microk8s) ctr_cmd=(microk8s ctr) ;;
+		rke2) ctr_cmd=(/var/lib/rancher/rke2/bin/ctr --address /run/k3s/containerd/containerd.sock) ;;
+		*) die "Importing image archives is not implemented for ${KUBERNETES}." ;;
+	esac
+
+	local archives=()
+	local archive
+	for archive in "${archive_dir}"/*.tar; do
+		[[ -f "${archive}" ]] && archives+=("${archive}")
+	done
+	[[ "${#archives[@]}" -gt 0 ]] || die "No image archives found in ${archive_dir}."
+
+	echo "::group::Importing image archives into ${KUBERNETES}"
+	for archive in "${archives[@]}"; do
+		info "Importing $(basename "${archive}")"
+		sudo "${ctr_cmd[@]}" --namespace k8s.io images import "${archive}"
+
+		# Delete each archive as soon as it is imported. The import copies the
+		# image into the content store, so keeping the archive around doubles
+		# what these images cost on disk, and the kata-deploy one is large
+		# enough to matter on a GitHub-hosted runner.
+		rm -f "${archive}"
+	done
+	echo "::endgroup::"
+}
+
 function set_test_cluster_namespace() {
 	# Delete any spurious tests namespace that was left behind
 	echo "Deleting test namespace ${TEST_CLUSTER_NAMESPACE}"
@@ -725,6 +776,15 @@ function helm_helper() {
 		die "HELM_IMAGE_TAG environment variable cannot be empty."
 	fi
 	yq -i ".image.tag = \"${HELM_IMAGE_TAG}\"" "${values_yaml}"
+
+	# A side-loaded image exists only in the cluster's own image store, so the
+	# chart's default pull policy of Always would send the kubelet asking a
+	# registry that has never heard of it. The other images the chart pulls
+	# (kubectl, node-feature-discovery) are unaffected: IfNotPresent still
+	# fetches those, they are simply never already present.
+	if [[ -n "${KATA_IMAGE_TARBALL_DIR}" ]]; then
+		yq -i ".imagePullPolicy = \"IfNotPresent\"" "${values_yaml}"
+	fi
 
 	# Derive the dispatcher image name from the main kata-deploy image,
 	# mirroring the -ci/non-ci logic used by the build/release scripts: the

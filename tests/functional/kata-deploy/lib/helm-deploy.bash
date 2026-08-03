@@ -39,6 +39,13 @@ generate_base_values() {
 		dispatcher_image="${kata_deploy_image}-job-dispatcher"
 	fi
 
+	# A side-loaded image (KATA_IMAGE_TARBALL_DIR, see import_image_archives())
+	# exists only in the cluster's own image store, so the chart's default pull
+	# policy of Always would send the kubelet asking a registry that has never
+	# heard of it.
+	local image_pull_policy="Always"
+	[[ -z "${KATA_IMAGE_TARBALL_DIR:-}" ]] || image_pull_policy="IfNotPresent"
+
 	cat > "${output_file}" <<EOF
 image:
   reference: ${DOCKER_REGISTRY}/${DOCKER_REPO}
@@ -48,6 +55,8 @@ job:
   dispatcherImage:
     reference: ${dispatcher_image}
     tag: ${DOCKER_TAG}
+
+imagePullPolicy: ${image_pull_policy}
 
 k8sDistribution: "${KUBERNETES}"
 debug: true
