@@ -1,0 +1,116 @@
+name: Kata Containers CI (GitHub-hosted runners)
+
+# The untrusted lane of the CI. Unlike ci-on-push-prt.yaml, this runs on
+# pull_request, so it executes the pull request's own code with a read-only
+# token and no repository secrets, and needs no 'ok-to-test' label: fork
+# contributors get this coverage automatically on every push.
+#
+# It is therefore limited to work that needs neither secrets nor a registry
+# image: the amd64 build, plus the test suites that run on GitHub-hosted
+# runners and install Kata straight from the build tarball. Everything else
+# stays in ci-on-push-prt.yaml for now, because it needs one of:
+#
+#   - self-hosted runners (s390x, ppc64le, arm64, NVIDIA GPU, zVSI)
+#   - AKS, and the Azure credentials to provision it
+#   - the kata-deploy-ci image published to ghcr.io, which requires a
+#     write-scoped token that a fork pull_request never gets
+#
+# The k8s suites on free runners belong to that last group rather than to the
+# self-hosted one: they run on ubuntu-24.04 but deploy Kata from the published
+# image, so they can only move here once a trusted lane performs that push.
+
+on:
+  pull_request:
+    branches:
+      - 'main'
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  skipper:
+    uses: ./.github/workflows/gatekeeper-skipper.yaml
+    with:
+      commit-hash: ${{ github.event.pull_request.head.sha }}
+      target-branch: ${{ github.event.pull_request.base.ref }}
+
+  build-kata-static-tarball-amd64:
+    needs: skipper
+    if: ${{ needs.skipper.outputs.skip_build != 'yes' }}
+    permissions:
+      contents: read
+      # Unused on this path. Every ghcr.io push in the build (the ORAS tarball
+      # cache and the build provenance attestation) is gated on
+      # push-to-registry, which defaults to "no" and is only set by the release
+      # and post-merge workflows. They are declared because a reusable workflow
+      # may not request more than its caller grants, and the build workflow
+      # declares them for the release path it shares. On a fork pull_request
+      # the token is read-only regardless of what is requested here.
+      packages: write # unused here; needed to call the shared build workflow
+      id-token: write # unused here; needed to call the shared build workflow
+      attestations: write # unused here; needed to call the shared build workflow
+    uses: ./.github/workflows/build-kata-static-tarball-amd64.yaml
+    with:
+      tarball-suffix: -${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      commit-hash: ${{ github.event.pull_request.head.sha }}
+      target-branch: ${{ github.event.pull_request.base.ref }}
+
+  # Build-only coverage: ubuntu-24.04-arm is GitHub-hosted, but every arm64 test
+  # suite needs either a self-hosted runner or the published image, so there is
+  # nothing here to run the result against yet.
+  build-kata-static-tarball-arm64:
+    needs: skipper
+    if: ${{ needs.skipper.outputs.skip_build != 'yes' }}
+    permissions:
+      contents: read
+      packages: write # unused here; needed to call the shared build workflow
+      id-token: write # unused here; needed to call the shared build workflow
+      attestations: write # unused here; needed to call the shared build workflow
+    uses: ./.github/workflows/build-kata-static-tarball-arm64.yaml
+    with:
+      tarball-suffix: -${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      commit-hash: ${{ github.event.pull_request.head.sha }}
+      target-branch: ${{ github.event.pull_request.base.ref }}
+
+  run-basic-amd64-tests:
+    needs: [skipper, build-kata-static-tarball-amd64]
+    if: ${{ needs.skipper.outputs.skip_test != 'yes' }}
+    uses: ./.github/workflows/basic-ci-amd64.yaml
+    with:
+      tarball-suffix: -${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      commit-hash: ${{ github.event.pull_request.head.sha }}
+      target-branch: ${{ github.event.pull_request.base.ref }}
+
+  run-cri-containerd-tests-amd64:
+    needs: [skipper, build-kata-static-tarball-amd64]
+    if: ${{ needs.skipper.outputs.skip_test != 'yes' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        params: [
+          { containerd_version: latest,    vmm: clh              },
+          { containerd_version: latest,    vmm: dragonball       },
+          { containerd_version: latest,    vmm: qemu             },
+          { containerd_version: latest,    vmm: clh-runtime-rs   },
+          { containerd_version: latest,    vmm: qemu-runtime-rs  },
+          { containerd_version: minimum, vmm: clh              },
+          { containerd_version: minimum, vmm: dragonball       },
+          { containerd_version: minimum, vmm: qemu             },
+          { containerd_version: minimum, vmm: clh-runtime-rs   },
+          { containerd_version: minimum, vmm: qemu-runtime-rs  },
+        ]
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-cri-amd64-${{ toJSON(matrix) }}
+      cancel-in-progress: true
+    uses: ./.github/workflows/run-cri-containerd-tests.yaml
+    with:
+      tarball-suffix: -${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      commit-hash: ${{ github.event.pull_request.head.sha }}
+      target-branch: ${{ github.event.pull_request.base.ref }}
+      runner: ubuntu-22.04
+      arch: amd64
+      containerd_version: ${{ matrix.params.containerd_version }}
+      vmm: ${{ matrix.params.vmm }}
