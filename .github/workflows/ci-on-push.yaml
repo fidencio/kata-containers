@@ -5,19 +5,19 @@ name: Kata Containers CI (GitHub-hosted runners)
 # token and no repository secrets, and needs no 'ok-to-test' label: fork
 # contributors get this coverage automatically on every push.
 #
-# It is therefore limited to work that needs neither secrets nor a registry
-# image: the amd64 build, plus the test suites that run on GitHub-hosted
-# runners and install Kata straight from the build tarball. Everything else
-# stays in ci-on-push-prt.yaml for now, because it needs one of:
+# It is therefore limited to work that needs neither secrets nor a published
+# image: the amd64 and arm64 builds, plus the suites that run on GitHub-hosted
+# runners. Everything else stays in ci-on-push-prt.yaml for now, because it
+# needs one of:
 #
 #   - self-hosted runners (s390x, ppc64le, arm64, NVIDIA GPU, zVSI)
 #   - AKS, and the Azure credentials to provision it
-#   - the kata-deploy-ci image published to ghcr.io, which requires a
-#     write-scoped token that a fork pull_request never gets
 #
-# The k8s suites on free runners belong to that last group rather than to the
-# self-hosted one: they run on ubuntu-24.04 but deploy Kata from the published
-# image, so they can only move here once a trusted lane performs that push.
+# The k8s suites do need the kata-deploy image, which a fork pull_request cannot
+# push to ghcr.io for want of a write-scoped token. They get it as a docker
+# archive instead: the image is built here like any other artifact, uploaded, and
+# side-loaded into each test cluster's own image store. Only the suites whose
+# cluster lives on the runner itself can do that, which rules out the AKS ones.
 
 on:
   pull_request:
@@ -75,6 +75,53 @@ jobs:
       commit-hash: ${{ github.event.pull_request.head.sha }}
       target-branch: ${{ github.event.pull_request.base.ref }}
 
+  # The k8s suites below deploy Kata from a container image, which this lane
+  # cannot push anywhere. So build it into a docker archive and pass it along as
+  # an artifact, for each suite to side-load into its own cluster.
+  build-kata-deploy-image-tarball-amd64:
+    needs: [skipper, build-kata-static-tarball-amd64]
+    if: ${{ needs.skipper.outputs.skip_test != 'yes' }}
+    permissions:
+      contents: read
+      packages: write # unused here; needed to call the shared image workflow
+    uses: ./.github/workflows/publish-kata-images.yaml
+    with:
+      tarball-suffix: -${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      # Nothing resolves this reference: the image never reaches a registry, and
+      # the tests pull it from their own image store. Naming a registry that
+      # cannot serve it is deliberate, so that a failed import surfaces as a
+      # pull failure rather than as a stale image quietly passing the tests.
+      registry: localhost
+      repo: kata-deploy-ci
+      tag: ${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-amd64
+      commit-hash: ${{ github.event.pull_request.head.sha }}
+      target-branch: ${{ github.event.pull_request.base.ref }}
+      runner: ubuntu-22.04
+      arch: amd64
+      image-kind: deploy
+      # Asking for a tarball is what turns the push off; there is no separate
+      # switch to set here.
+      image-tarball-artifact: kata-deploy-image-tarball-amd64-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+
+  build-kata-monitor-image-tarball-amd64:
+    needs: [skipper, build-kata-static-tarball-amd64]
+    if: ${{ needs.skipper.outputs.skip_test != 'yes' }}
+    permissions:
+      contents: read
+      packages: write # unused here; needed to call the shared image workflow
+    uses: ./.github/workflows/publish-kata-images.yaml
+    with:
+      tarball-suffix: -${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      registry: localhost
+      repo: kata-monitor-ci
+      tag: ${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-amd64
+      commit-hash: ${{ github.event.pull_request.head.sha }}
+      target-branch: ${{ github.event.pull_request.base.ref }}
+      runner: ubuntu-22.04
+      arch: amd64
+      image-kind: monitor
+      image-tarball-artifact: kata-monitor-image-tarball-amd64-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+
   run-basic-amd64-tests:
     needs: [skipper, build-kata-static-tarball-amd64]
     if: ${{ needs.skipper.outputs.skip_test != 'yes' }}
@@ -114,3 +161,46 @@ jobs:
       arch: amd64
       containerd_version: ${{ matrix.params.containerd_version }}
       vmm: ${{ matrix.params.vmm }}
+
+  run-k8s-tests-on-free-runner:
+    needs: [skipper, build-kata-deploy-image-tarball-amd64]
+    if: ${{ needs.skipper.outputs.skip_test != 'yes' }}
+    uses: ./.github/workflows/run-k8s-tests-on-free-runner.yaml
+    with:
+      tarball-suffix: -${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      registry: localhost
+      repo: kata-deploy-ci
+      tag: ${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-amd64
+      commit-hash: ${{ github.event.pull_request.head.sha }}
+      pr-number: ${{ github.event.pull_request.number }}
+      target-branch: ${{ github.event.pull_request.base.ref }}
+      image-tarball-artifact: kata-deploy-image-tarball-amd64-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+
+  run-kata-deploy-tests:
+    needs: [skipper, build-kata-deploy-image-tarball-amd64]
+    if: ${{ needs.skipper.outputs.skip_test != 'yes' }}
+    uses: ./.github/workflows/run-kata-deploy-tests.yaml
+    with:
+      registry: localhost
+      repo: kata-deploy-ci
+      tag: ${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-amd64
+      commit-hash: ${{ github.event.pull_request.head.sha }}
+      pr-number: ${{ github.event.pull_request.number }}
+      target-branch: ${{ github.event.pull_request.base.ref }}
+      image-tarball-artifact: kata-deploy-image-tarball-amd64-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+
+  run-kata-monitor-k8s-tests:
+    needs: [skipper, build-kata-deploy-image-tarball-amd64, build-kata-monitor-image-tarball-amd64]
+    if: ${{ needs.skipper.outputs.skip_test != 'yes' }}
+    uses: ./.github/workflows/run-kata-monitor-k8s-tests.yaml
+    with:
+      registry: localhost
+      repo: kata-deploy-ci
+      tag: ${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-amd64
+      commit-hash: ${{ github.event.pull_request.head.sha }}
+      pr-number: ${{ github.event.pull_request.number }}
+      target-branch: ${{ github.event.pull_request.base.ref }}
+      kata-monitor-image-reference: localhost/kata-monitor-ci
+      kata-monitor-image-tag: ${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-amd64
+      image-tarball-artifact: kata-deploy-image-tarball-amd64-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      kata-monitor-image-tarball-artifact: kata-monitor-image-tarball-amd64-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
