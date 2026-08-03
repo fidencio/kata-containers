@@ -21,6 +21,15 @@ on:
         required: false
         type: string
         default: ""
+      image-tarball-artifact:
+        description: >
+          Artifact holding the kata-deploy image as a docker archive. When set,
+          the image is side-loaded into the cluster from there instead of being
+          pulled from `registry`/`repo`, which is what lets this suite run in a
+          lane that cannot push to a registry.
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-kata-deploy
@@ -52,6 +61,9 @@ jobs:
       GH_PR_NUMBER: ${{ inputs.pr-number }}
       KATA_HYPERVISOR: ${{ matrix.vmm }}
       KUBERNETES: ${{ matrix.k8s }}
+      # Set only when the image arrives as an artifact: it tells the test scripts
+      # both where to import it from and to stop expecting a registry to have it.
+      KATA_IMAGE_TARBALL_DIR: ${{ inputs.image-tarball-artifact != '' && '/tmp/kata-image-tarballs' || '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -85,6 +97,20 @@ jobs:
 
       - name: Deploy ${{ matrix.k8s }}
         run:  bash tests/functional/kata-deploy/gha-run.sh deploy-k8s
+
+      - name: get-kata-deploy-image-tarball
+        if: ${{ inputs.image-tarball-artifact != '' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.image-tarball-artifact }}
+          path: ${{ env.KATA_IMAGE_TARBALL_DIR }}
+
+      # Each distribution here bundles its own containerd, so this goes through
+      # that distribution's own ctr. The archive is deleted as it is imported:
+      # the runner has to hold both it and the unpacked image otherwise.
+      - name: Import the kata-deploy image into the cluster
+        if: ${{ inputs.image-tarball-artifact != '' }}
+        run: bash tests/functional/kata-deploy/gha-run.sh import-image-archives
 
       - name: Install `bats`
         run: bash tests/functional/kata-deploy/gha-run.sh install-bats

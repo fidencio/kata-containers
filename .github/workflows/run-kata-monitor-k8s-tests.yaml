@@ -32,6 +32,22 @@ on:
         description: Tag of the kata-monitor image to exercise.
         required: true
         type: string
+      image-tarball-artifact:
+        description: >
+          Artifact holding the kata-deploy image as a docker archive. When set,
+          the image is side-loaded into the cluster from there instead of being
+          pulled from `registry`/`repo`, which is what lets this suite run in a
+          lane that cannot push to a registry.
+        required: false
+        type: string
+        default: ""
+      kata-monitor-image-tarball-artifact:
+        description: >
+          Same, for the kata-monitor image. This suite deploys two images, and
+          side-loading only one of them would still leave it needing a registry.
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-kata-monitor-k8s
@@ -65,6 +81,10 @@ jobs:
       KATA_MONITOR_IMAGE_REFERENCE: ${{ inputs.kata-monitor-image-reference }}
       KATA_MONITOR_IMAGE_TAG: ${{ inputs.kata-monitor-image-tag }}
       GH_TOKEN: ${{ github.token }}
+      # Set only when the images arrive as artifacts: it tells the test scripts
+      # both where to import them from and to stop expecting a registry to have
+      # them.
+      KATA_IMAGE_TARBALL_DIR: ${{ inputs.image-tarball-artifact != '' && '/tmp/kata-image-tarballs' || '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -98,6 +118,27 @@ jobs:
 
       - name: Deploy ${{ matrix.k8s }}
         run:  bash tests/functional/kata-deploy/gha-run.sh deploy-k8s
+
+      - name: get-kata-deploy-image-tarball
+        if: ${{ inputs.image-tarball-artifact != '' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.image-tarball-artifact }}
+          path: ${{ env.KATA_IMAGE_TARBALL_DIR }}
+
+      - name: get-kata-monitor-image-tarball
+        if: ${{ inputs.kata-monitor-image-tarball-artifact != '' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.kata-monitor-image-tarball-artifact }}
+          path: ${{ env.KATA_IMAGE_TARBALL_DIR }}
+
+      # Imports every archive in the directory, so both images land in one pass.
+      # Each is deleted as it goes: the runner has to hold both the archive and
+      # the unpacked image otherwise.
+      - name: Import the images into the cluster
+        if: ${{ inputs.image-tarball-artifact != '' }}
+        run: bash tests/functional/kata-deploy/gha-run.sh import-image-archives
 
       - name: Install `bats`
         run: bash tests/functional/kata-deploy/gha-run.sh install-bats
