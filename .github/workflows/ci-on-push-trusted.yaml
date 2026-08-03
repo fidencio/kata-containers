@@ -10,23 +10,29 @@ name: Kata Containers CI (trusted)
 # every job added here:
 #
 #   - The workflow code is always the default branch's. GitHub resolves
-#     workflow_run workflows from the default branch, so a pull request cannot
-#     change what this lane does.
-#   - The test harness is the base branch's too. Every suite checks out
-#     `inputs.commit-hash`, so passing github.sha - the default branch tip, on a
-#     workflow_run - runs base-branch tests/ against the pull request's
-#     artifacts. Nothing here checks out the fork, which is also why no
-#     actions/checkout in this lane needs allow-unsafe-pr-checkout.
+#     workflow_run workflows from the default branch, so a pull request can
+#     change what this lane is handed, but never what it does with it.
+#   - Nothing is built here. The artifacts arrive from the untrusted lane, which
+#     is where the build scripts run - by far the largest body of code a pull
+#     request brings, and now none of it runs anywhere near a secret.
 #
-# The cost of the second property is that changes to tests/ are not exercised
-# here; Gatekeeper requires the ok-to-test-prt lane for those instead. See
-# tools/testing/gatekeeper/required-tests.yaml.
+# What this lane does run is the pull request's own tests/, checked out at the
+# very commit the artifacts were built from, so that a pull request changing a
+# test and the code under it is exercised as one tree. That is what
+# allow-unsafe-pr-checkout on the suites' checkout is for, and it is a
+# deliberate exception rather than an oversight: ok-to-test is a maintainer
+# saying the diff has been read, which is exactly what the label has always
+# meant on the pull_request_target lane this replaces. The difference is that
+# the build no longer runs privileged, and only the suites that genuinely need a
+# cluster do.
 #
-# Neither property makes the lane free, though: it publishes binaries a fork
-# built under this repository's name, and runs them on clusters this repository
-# pays for. So the lane only runs on a pull request labelled ok-to-test, and
-# leaves its status pending until then. Adding the label later does not start
-# it - nothing re-fires workflow_run - which is what /retest is for.
+# So the lane only runs on a pull request labelled ok-to-test, and leaves its
+# status pending until then. Adding the label later does not start it - nothing
+# re-fires workflow_run - which is what /retest is for.
+#
+# The one thing that cannot be exercised from here is this lane's own workflow
+# files, since those are always the default branch's. Keep the YAML in this lane
+# thin and put the substance in tests/, which does come from the pull request.
 #
 # Because a workflow_run run is attributed to the default branch rather than to
 # the pull request, none of this shows up on the PR of its own accord. The lane
@@ -36,8 +42,9 @@ name: Kata Containers CI (trusted)
 
 on:
   # zizmor: ignore[dangerous-triggers]
-  # Privileged by design. It is safe for the two reasons above: the workflow
-  # code comes from the default branch, and no job checks out the pull request.
+  # Privileged by design. The workflow code comes from the default branch, no
+  # job here builds anything, and the fork code it does run is the tests/ of a
+  # pull request a maintainer has labelled - see the note above.
   workflow_run:
     workflows:
       - Kata Containers CI (GitHub-hosted runners)
@@ -116,13 +123,20 @@ jobs:
           number="$(jq -r '.number' <<< "${pr}")"
           base="$(jq -r '.base.ref' <<< "${pr}")"
 
-          # The lane runs the base branch's harness, so a fork cannot steer what
-          # runs here - but it does hand this lane binaries it built, which are
-          # then published under this repository's name and run on a cluster
-          # this repository pays for. That is worth a maintainer's nod, and the
-          # label is where it is recorded: a label survives new pushes, and
-          # Gatekeeper reads the same one to decide whether to require these
-          # checks at all.
+          # This label is the lane's security boundary, not a courtesy. Past
+          # this point a pull request's tests/ are checked out and run with this
+          # repository's secrets, on clusters it pays for, and binaries a fork
+          # built are published under its name. ok-to-test is a maintainer
+          # saying the diff has been read - the same thing it means on the
+          # pull_request_target lane today.
+          #
+          # A label survives new pushes, which is what makes it usable at all
+          # and is also its weak spot: what was read is not necessarily what
+          # ends up running. Removing it on a force-push is the obvious next
+          # turn of the screw, if the project decides it wants one.
+          #
+          # Gatekeeper reads this same label to decide whether to require these
+          # checks at all, so the two cannot drift apart.
           #
           # The status below is posted either way, so that the lane can be
           # pointed at once the label arrives - see .github/workflows/retest.yaml.
@@ -382,11 +396,15 @@ jobs:
       # here, so this is where the suite has to pull them from.
       repo: ${{ github.repository }}/kata-deploy-ci
       tag: ${{ needs.resolve.outputs.tag }}-amd64
-      # The base branch, not the pull request. The suite checks this out, so it
-      # is what keeps the harness a reviewed one; the artifacts it exercises are
-      # still the pull request's. On a workflow_run, github.sha is the tip of the
-      # default branch.
-      commit-hash: ${{ github.sha }}
+      # The pull request's own commit, and the same one the untrusted lane built
+      # these artifacts from, so the tests and the binaries beneath them come
+      # from one tree. A pull request that has to change both at once is
+      # therefore exercised here as it will be once merged.
+      commit-hash: ${{ github.event.workflow_run.head_sha }}
+      # Which actions/checkout refuses from v7 on, this being a workflow_run of
+      # a pull_request. Asking for it in as many words is the point: the label
+      # resolve checked is what stands behind it.
+      allow-unsafe-pr-checkout: true
       pr-number: ${{ needs.resolve.outputs.pr-number }}
       target-branch: ${{ needs.resolve.outputs.target-branch }}
     secrets:
