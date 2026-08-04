@@ -11,6 +11,10 @@ name: ci branch cleanup
 #
 # Nothing is checked out here and the branch name is built from a number, so the
 # privileged trigger buys exactly one DELETE.
+#
+# GITHUB_TOKEN is enough for that, which is worth noting given that creating the
+# same branch needs a credential of the project's own: what GitHub refuses an App
+# token is introducing workflow files, and deleting a ref introduces nothing.
 
 on:
   # zizmor: ignore[dangerous-triggers]

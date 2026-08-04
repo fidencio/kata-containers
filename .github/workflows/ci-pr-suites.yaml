@@ -30,9 +30,17 @@ name: Kata Containers CI (dispatched)
 #     workflow may only reduce what the repository allows, never exceed it, so
 #     that is what stops a fork's YAML asking for packages: write. Publishing
 #     stays in the trusted lane, which is always the default branch's code.
-#   - the credentials that matter in an Environment with required reviewers, so
-#     that reaching them takes an approval GitHub enforces per run rather than a
-#     label this repository honours once.
+#   - the credentials that matter in an Environment whose deployment branch
+#     policy names only the default branch. A job dispatched on ci/pr-<number>
+#     that asks for such an environment does not start at all, which is how the
+#     token the trusted lane uses to write this branch is kept out of reach of
+#     the YAML on it. Required reviewers do the same job per run, at the cost of
+#     a click each time.
+#
+# That branch is written with a credential of the project's own, not with
+# GITHUB_TOKEN: GitHub refuses an App token any ref write that changes
+# .github/workflows/, and those changes are the point. ci-on-push-trusted.yaml
+# says what the credential needs to be and where it has to live.
 #
 # What does not help, and is worth writing down so nobody reaches for it: scoping
 # the Azure federated credential by OIDC subject. The subject names a path and a

@@ -405,23 +405,58 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       actions: write # needed to dispatch the suites, and to read the run that starts
-      contents: write # needed to put the pull request's commit on a branch here
       statuses: write # needed to point the pull request at the dispatched run
+    # Where the credential that can write the branch lives - see the first step.
+    # The environment's deployment branch policy has to name the default branch
+    # and nothing else, and that is not a formality: it is what stops the
+    # dispatched run, whose YAML is a fork's, from reading this secret. A job on
+    # ci/pr-<number> naming this environment does not start at all. Verified
+    # rather than assumed, and the reason the suites use a different environment.
+    environment:
+      name: ci-dispatcher
+      deployment: false
     # The suites themselves are the long part; this job only watches them.
     timeout-minutes: 240
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # ci/ is deliberate: every push trigger in this repository filters on the
-      # default branch, so a branch under here starts nothing by existing. Keep
-      # it that way - a push filter that matches this prefix would run whatever
-      # it triggers on a fork's commit.
+      # ci/ is deliberate: no push trigger in this repository matches it, so the
+      # branch starts nothing by existing. That holds for this repository's
+      # workflows; the branch carries the pull request's .github/ too, so a
+      # workflow it adds with a push trigger of its own runs here, privileged.
+      # ok-to-test already means someone read the diff - this is one more thing
+      # that reading it has to cover.
       BRANCH: ci/pr-${{ needs.resolve.outputs.pr-number }}
       WORKFLOW: ci-pr-suites.yaml
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - name: Put the pull request's commit on a branch of this repository
+        env:
+          # Not GITHUB_TOKEN, which cannot do this. GitHub refuses an App token -
+          # and GITHUB_TOKEN is one - any ref write whose commit changes
+          # .github/workflows/, answering 403 "Resource not accessible by
+          # integration". There is no permission for it to ask for: the
+          # permissions block has no workflows: write, only Apps and personal
+          # tokens have that scope. And a branch carrying the pull request's
+          # workflow changes is precisely what this lane is for, so the block
+          # lands on the one case that matters.
+          #
+          # It is worth being clear about what this credential is, because the
+          # rule it steps around is not arbitrary: GitHub stops a workflow from
+          # introducing workflow files exactly because doing so escalates. This
+          # lane escalates on purpose, behind ok-to-test, and the containment is
+          # the environment above - so the token wants the narrowest thing that
+          # works. A fine-grained token on this repository alone, Contents:
+          # write and Workflows: write, nothing else. A GitHub App installed on
+          # the repository is the better shape still, since its token is minted
+          # per run and expires; an owner swapping one in changes only this step.
+          GH_TOKEN: ${{ secrets.CI_DISPATCH_TOKEN }}
         run: |
           set -o errexit -o nounset -o pipefail
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::CI_DISPATCH_TOKEN is not set in the ci-dispatcher environment, so this lane cannot put the pull request's commit on a branch and cannot run its suites. It wants a token with Contents: write and Workflows: write on this repository, held as a secret of that environment, whose deployment branch policy must allow only the default branch."
+            exit 1
+          fi
 
           # The commit itself, not a merge of it: it is the one the untrusted
           # lane built these artifacts from, so the tests and the binaries under
