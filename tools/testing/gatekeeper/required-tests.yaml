@@ -16,13 +16,15 @@ paths:
   # CI
   - "^ci/openshift-ci/": []
   - "^\\.github/workflows/static-checks": ["static"]
-  # A change to a workflow used to require nothing at all, which the trusted
-  # lane makes untenable: it resolves its workflows from the default branch, so
-  # a pull request's changes to them are exercised by the lanes that run the
-  # pull request's own workflow files, and not by that one. There is no fixing
-  # that from here - it is what workflow_run is - so the answer is to keep the
-  # trusted lane's own YAML thin and its logic in tests/, which it does check
-  # out from the pull request.
+  # A change to a workflow used to require nothing at all, which stopped being
+  # tenable once a lane ran with this repository's credentials. Both new lanes
+  # run the pull request's own workflow files - the untrusted one because
+  # pull_request resolves them from the pull request, the trusted one because it
+  # dispatches its suites on a branch carrying the pull request's commit - so
+  # requiring them here means a change to a suite is exercised before it merges.
+  # Four files are still exempt for want of any way to do it: the trusted lane
+  # itself, gatekeeper.yaml, retest.yaml and revoke-ok-to-test.yaml, which a
+  # privileged trigger always reads from the default branch.
   - "^\\.github/workflows/": ["test", "test-trusted", "test-prt"]
   - "^docs/": ["static"]
   - "^mkdocs\\.yaml$": ["static"]
@@ -116,7 +118,7 @@ mapping:
     # The suites the untrusted lane cannot run, because they need a cluster that
     # is not the runner itself and credentials to raise it.
     #
-    # The lane builds nothing: it runs the pull request's tests/ against the
+    # The lane builds nothing: it runs the pull request's own suites against the
     # artifacts the untrusted lane built, publishes those under this
     # repository's name, and puts them on clusters this repository pays for.
     # Which is what the label is for, and why it is the lane's boundary rather
@@ -124,12 +126,15 @@ mapping:
     # pull request neither runs these nor is asked for them - see
     # .github/workflows/ci-on-push-trusted.yaml.
     names:
-      # ci-on-push-trusted.yaml, the trusted lane
-      - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, normal)
-      - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, containerd)
-      - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, oci-distribution)
-      - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, small)
-      - Kata Containers CI (trusted) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, normal)
+      # ci-pr-suites.yaml, dispatched by the trusted lane on the pull request's
+      # own commit, which is why the prefix is that workflow's name and not the
+      # trusted lane's. Gatekeeper reaches them through the same pointer status:
+      # the lane points at both its own run and the dispatched one.
+      - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, normal)
+      - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, containerd)
+      - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, oci-distribution)
+      - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, small)
+      - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, normal)
     required-labels:
       - ok-to-test
   test-prt:
