@@ -2,64 +2,24 @@ name: zz probe ref creation
 
 on:
   workflow_dispatch:
-    inputs:
-      old-sha:
-        required: true
-        type: string
 
 permissions: {}
 
 jobs:
   probe:
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-      actions: write
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OLD_SHA: ${{ inputs.old-sha }}
-      BASE_SHA: ${{ github.sha }}
+    environment:
+      name: zz-probe-env
+      deployment: false
     steps:
-      - name: probe
+      - name: Can this ref reach the environment's secret?
+        env:
+          SECRET: ${{ secrets.ZZ_PROBE_SECRET }}
         run: |
-          try() {
-            local name="$1" sha="$2"
-            echo "=== TRY ${name} -> ${sha}"
-            if out="$(gh api "repos/${GITHUB_REPOSITORY}/git/refs" --method POST \
-                --field ref="refs/heads/${name}" --field sha="${sha}" 2>&1)"; then
-              echo "RESULT ${name}: CREATED"
-              gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/${name}" --method DELETE > /dev/null 2>&1 \
-                && echo "RESULT ${name}: cleaned up"
-            else
-              echo "RESULT ${name}: REFUSED -- $(tr -d '\n' <<< "${out}")"
-            fi
-          }
-
-          # A commit that introduces nothing at all: same tree as the branch it
-          # is parented on. Unreachable from any ref, and touching no workflow
-          # file. Which of those two the block is about is the question.
-          tree="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${BASE_SHA}" --jq '.tree.sha')"
-          empty="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits" --method POST \
-            --field message="probe: no change at all" --field tree="${tree}" \
-            --field 'parents[]'="${BASE_SHA}" --jq '.sha')"
-          echo "empty-change commit ${empty}"
-          try zz-probe/no-change "${empty}"
-
-          # A commit from the pull request that predates its workflow edits.
-          try zz-probe/old-pr-commit "${OLD_SHA}"
-
-          echo "=== TRY dispatching another workflow with GITHUB_TOKEN"
-          before="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/actionlint.yaml/runs?per_page=1" --jq '.workflow_runs[0].id // 0')"
-          if out="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/actionlint.yaml/dispatches" \
-              --method POST --field ref=main 2>&1)"; then
-            echo "RESULT dispatch call: ACCEPTED"
-            sleep 20
-            after="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/actionlint.yaml/runs?per_page=1" --jq '.workflow_runs[0].id // 0')"
-            if [[ "${after}" != "${before}" ]]; then
-              echo "RESULT dispatch: RAN as ${after}"
-            else
-              echo "RESULT dispatch: NO RUN APPEARED (newest is still ${before})"
-            fi
+          set -o errexit -o nounset -o pipefail
+          echo "ref=${GITHUB_REF}"
+          if [[ -n "${SECRET:-}" ]]; then
+            echo "RESULT: the environment secret IS readable here"
           else
-            echo "RESULT dispatch call: REFUSED -- $(tr -d '\n' <<< "${out}")"
+            echo "RESULT: the environment secret is EMPTY here"
           fi
