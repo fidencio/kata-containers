@@ -1,0 +1,138 @@
+name: revoke ok-to-test
+
+# ok-to-test means a maintainer has read the diff, and it is what stands behind
+# the trusted lane running a fork's tests/ with this repository's secrets. A
+# label outlives the diff it was added for, though, and that is the gap this
+# workflow closes: a branch rewritten after the label was added leaves the label
+# vouching for commits that no longer exist.
+#
+# It is a rewrite that is treated this way and not every push. New commits on
+# top stay in the pull request's list of commits, where a reviewer sees them and
+# the "N commits" count moves; a force-push replaces what was read with
+# something that can be made to look the same, and the commits it replaced are
+# gone. The one is visible, the other is the one worth acting on.
+#
+# A push by someone who could add the label themselves changes nothing, so those
+# are left alone. Anyone else pushing costs the pull request its label, and a
+# maintainer who still wants the lane to run can read the new diff, label it
+# again and comment /retest.
+#
+# The trusted lane checks the label a second time before it does anything
+# privileged, which is what makes this workflow's timing unimportant: the two
+# race for the same push, and it does not matter which wins.
+
+on:
+  # zizmor: ignore[dangerous-triggers]
+  # Privileged because removing a label takes write access, which the token of a
+  # fork's pull_request event does not have. That is all the privilege is used
+  # for: nothing here is checked out, no job runs anything the pull request
+  # brought, and the event reaches the shell through the environment only.
+  pull_request_target:
+    types:
+      - synchronize
+
+permissions: {}
+
+concurrency:
+  # Not cancel-in-progress: every push has to be judged on its own. A rewrite
+  # followed quickly by an ordinary push would otherwise have its verdict
+  # cancelled by the push that is not the problem.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+
+jobs:
+  revoke:
+    name: revoke ok-to-test
+    # Nothing to revoke otherwise, which is the overwhelming majority of pushes.
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'ok-to-test') }}
+    runs-on: ubuntu-22.04
+    permissions:
+      pull-requests: write # needed to remove the label and to say why
+    steps:
+      - name: Decide whether the push outran the review
+        id: verdict
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          # GitHub works out the association of the pull request's author, and
+          # of nobody else, so this only answers the question when the two names
+          # below agree. When they do not - a maintainer pushing to someone
+          # else's branch - the push is treated as untrusted and costs a label
+          # that same maintainer can add back. Reading organisation membership
+          # to do better is not something a token here can do.
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          PUSHER: ${{ github.event.sender.login }}
+          AUTHOR_TRUSTED: ${{ contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          if [[ "${PUSHER}" == "${AUTHOR}" && "${AUTHOR_TRUSTED}" == "true" ]]; then
+            echo "::notice::Pushed by a ${ASSOCIATION}, who can add the label in the first place. Leaving it."
+            echo "revoke=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # Whether the branch was rewritten, asked of the fork, since the
+          # commits are its own. A push that only adds commits leaves the old
+          # head an ancestor of the new one, which is what "ahead" means here.
+          #
+          # A head the fork can no longer resolve is itself the mark of a
+          # rewrite - a commit still on a branch does not go missing - and an
+          # answer that cannot be had at all is not a reason to keep vouching
+          # for a diff, so both land on the same side.
+          status="$(gh api "repos/${HEAD_REPO}/compare/${BEFORE}...${AFTER}" \
+            --jq '.status' 2>/dev/null || echo unavailable)"
+
+          case "${status}" in
+            ahead | identical)
+              echo "::notice::${BEFORE} is still an ancestor of ${AFTER}, so nothing that was reviewed has gone anywhere. Leaving the label."
+              revoke=false
+              ;;
+            *)
+              echo "::warning::${AFTER} does not descend from the reviewed ${BEFORE} (${status})."
+              revoke=true
+              ;;
+          esac
+
+          echo "revoke=${revoke}" >> "${GITHUB_OUTPUT}"
+
+      - name: Take the label back
+        if: ${{ steps.verdict.outputs.revoke == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PUSHER: ${{ github.event.sender.login }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          # Keep in step with the trusted lane and with
+          # tools/testing/gatekeeper/required-tests.yaml: all three name it.
+          LABEL: ok-to-test
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          if ! response="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels/${LABEL}" \
+              --method DELETE 2>&1)"; then
+            # Someone got there first, by hand or through an earlier push of a
+            # burst of them. The outcome is the one this job wanted, so failing
+            # over it would only leave a red mark on a pull request that is in
+            # exactly the right state.
+            if grep -q 'HTTP 404' <<< "${response}"; then
+              echo "::notice::${LABEL} was gone already."
+              exit 0
+            fi
+            echo "${response}" >&2
+            exit 1
+          fi
+
+          # Said out loud, because a label disappearing on its own is otherwise
+          # the kind of thing people spend an afternoon on. The login is quoted
+          # rather than mentioned: this is a note about a push, not a summons.
+          body="$(printf '%s\n' \
+            "Removed \`${LABEL}\`: \`${PUSHER}\` force-pushed this branch, so the commits the label was added for (\`${BEFORE}\`) are no longer the ones that would run - the branch is now at \`${AFTER}\`." \
+            "" \
+            "The label is what lets the trusted lane run this pull request's tests with the project's secrets, on the clusters it pays for, so it only means anything while it points at a diff someone has read. A maintainer happy with the new one can add the label back and comment \`/retest\`.")"
+
+          gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "${body}"

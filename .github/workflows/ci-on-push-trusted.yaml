@@ -132,8 +132,10 @@ jobs:
           #
           # A label survives new pushes, which is what makes it usable at all
           # and is also its weak spot: what was read is not necessarily what
-          # ends up running. Removing it on a force-push is the obvious next
-          # turn of the screw, if the project decides it wants one.
+          # ends up running. A branch rewritten under the label loses it - see
+          # .github/workflows/revoke-ok-to-test.yaml - and the authorise job
+          # below reads the label again once the artifacts are in, so that this
+          # early answer is never the one acted on.
           #
           # Gatekeeper reads this same label to decide whether to require these
           # checks at all, so the two cannot drift apart.
@@ -248,13 +250,62 @@ jobs:
             sleep 60
           done
 
+  # The label again, and this time immediately before it is acted on. resolve
+  # read it seconds after the push, which is soon enough to start the lane and
+  # far too early to be the last word: the artifacts take the better part of an
+  # hour to arrive, and in that hour the pull request can be pushed to, the
+  # label taken back by hand, or taken back by
+  # .github/workflows/revoke-ok-to-test.yaml because the branch was rewritten.
+  #
+  # This job is what makes any of those effective, and what makes the timing of
+  # that workflow unimportant: it does not matter whether the label goes before
+  # or after resolve read it, only that it is gone by the time anything is
+  # published or any test is run.
+  authorise:
+    name: authorise
+    needs: [resolve, wait-for-artifacts]
+    if: ${{ needs.resolve.outputs.proceed == 'true' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      pull-requests: read # needed to re-read the label and the head commit
+    steps:
+      - name: Check the label still stands, and still stands for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr-number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REQUIRED_LABEL: ok-to-test
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+
+          if ! jq -e --arg want "${REQUIRED_LABEL}" \
+              'any(.labels[]?.name; . == $want)' <<< "${pr}" > /dev/null; then
+            echo "::error::${REQUIRED_LABEL} has been removed from pull request ${PR_NUMBER} since this run started, so it is no longer cleared to run. A maintainer can label it again and comment /retest."
+            exit 1
+          fi
+
+          # And that it is still this commit the label sits on. A push moves the
+          # branch on without the label noticing, and the concurrency group
+          # cancels this run when it does - but a cancellation that lands
+          # between the check above and the jobs below would be a gap, and this
+          # closes it.
+          head="$(jq -r '.head.sha' <<< "${pr}")"
+          if [[ "${head}" != "${HEAD_SHA}" ]]; then
+            echo "::error::Pull request ${PR_NUMBER} has moved from ${HEAD_SHA} to ${head}, so this run is testing a commit that is no longer under review."
+            exit 1
+          fi
+
+          echo "Pull request ${PR_NUMBER} is labelled ${REQUIRED_LABEL} and still at ${HEAD_SHA}."
+
   # This is the whole point of the lane: the images exist, but only as docker
   # archives, because the lane that built them holds no credentials to push
   # them anywhere. Publishing them here is what puts them within reach of a
   # cluster that is not the runner itself, an AKS one above all.
   publish-images:
     name: publish-images
-    needs: [resolve, wait-for-artifacts]
+    needs: [resolve, wait-for-artifacts, authorise]
     if: ${{ needs.resolve.outputs.proceed == 'true' }}
     runs-on: ubuntu-22.04
     permissions:
@@ -347,7 +398,7 @@ jobs:
   # into something the clusters can pull.
   restage-artifacts:
     name: restage-artifacts
-    needs: [resolve, wait-for-artifacts]
+    needs: [resolve, wait-for-artifacts, authorise]
     if: ${{ needs.resolve.outputs.proceed == 'true' }}
     runs-on: ubuntu-22.04
     permissions:
@@ -414,7 +465,7 @@ jobs:
 
   report:
     name: report
-    needs: [resolve, wait-for-artifacts, publish-images, restage-artifacts, run-k8s-tests-on-aks]
+    needs: [resolve, wait-for-artifacts, authorise, publish-images, restage-artifacts, run-k8s-tests-on-aks]
     # always(), so that a failing suite still resolves the pending status the
     # resolve job left on the pull request.
     if: ${{ always() && needs.resolve.outputs.proceed == 'true' }}
