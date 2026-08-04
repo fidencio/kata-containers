@@ -52,6 +52,14 @@ install_regorus_cargo()
     info "Successfully installed regorus using cargo"
 
     # Cache the installed binary using oras, so we don't have to build it again.
+    #
+    # regorus is installed by this point, so nothing below is allowed to fail the
+    # caller: it is a speed-up for later runs and no more. Writing to the cache
+    # needs a token with package write access, which the run of any fork's pull
+    # request does not have - GITHUB_TOKEN is read-only there - and neither does a
+    # repository that does not own the package. Both are ordinary situations, and
+    # both used to end in "Failed to install regorus" over a binary that had just
+    # been built successfully.
     if [[ -z "${ARTEFACT_REGISTRY_PASSWORD}" ]]; then
         warn "ARTEFACT_REGISTRY_PASSWORD is not set. Skipping caching of regorus binary."
         return 0
@@ -63,16 +71,16 @@ install_regorus_cargo()
     fi
 
     if ! echo "${ARTEFACT_REGISTRY_PASSWORD}" | oras login "${ARTEFACT_REGISTRY:-ghcr.io}" -u "${ARTEFACT_REGISTRY_USERNAME}" --password-stdin; then
-        warn "Failed to login to oras registry"
-        return 1
+        warn "Failed to login to oras registry. Skipping caching of regorus binary."
+        return 0
     fi
 
     local image
     image="${ARTEFACT_REGISTRY:-ghcr.io}/${ARTEFACT_REPOSITORY:-kata-containers/kata-containers}/cached-artefacts/regorus:${version}"
 
     if ! (cd "${HOME}/.cargo/bin/" && oras push "${image}" --no-tty regorus); then
-        warn "Failed to push regorus binary to oras cache"
-        return 1
+        warn "Failed to push regorus binary to oras cache. The binary is installed all the same."
+        return 0
     fi
     info "Successfully pushed regorus binary to oras cache as ${image}"
 }
