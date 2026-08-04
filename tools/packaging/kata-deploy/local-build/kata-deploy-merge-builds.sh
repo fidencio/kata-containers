@@ -73,8 +73,16 @@ pushd "${tarball_content_dir}"
 			# In this case the tag was not published yet,
 			# thus we need to rely on the VERSION file.
 			cp "${repo_root_dir}/VERSION" "${prefix}/"
+		elif described_version=$(git describe --tags 2>/dev/null); then
+			echo "${described_version}" > "${prefix}/VERSION"
 		else
-			git describe --tags > "${prefix}/VERSION"
+			# No tag is reachable, which is the normal state of any
+			# clone that did not ask for them: a fork's, a shallow
+			# one, or a repository the tags were never pushed to. The
+			# release path above already trusts the VERSION file for
+			# want of a tag, so trust it here too rather than failing
+			# a build over the absence of something nothing needs.
+			cp "${repo_root_dir}/VERSION" "${prefix}/"
 		fi
 		[[ -n "${kata_versions_yaml_file}" ]] && cp "${kata_versions_yaml_file}" "${prefix}/"
 	fi
