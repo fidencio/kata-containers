@@ -227,9 +227,9 @@ mapping:
       # - Static checks self-hosted / build-checks (ubuntu-24.04-s390x) / check (sudo -E PATH="$PATH" make test, runtime-rs, src/runtime-rs, rust, protobuf-compiler, ubunt...
       # - Static checks self-hosted / build-checks (ubuntu-24.04-s390x) / check (sudo -E PATH="$PATH" make test, runtime, src/runtime, golang, XDG_RUNTIME_DIR, ubuntu-24.0...
       # - Static checks self-hosted / build-checks (ubuntu-24.04-s390x) / check (sudo -E PATH="$PATH" make test, trace-forwarder, src/tools/trace-forwarder, rust, ubuntu-2...
-    required-labels:
-      # TEMPORARY, sandbox only: dropped along with the label on test-prt, so a
-      # run here needs no labelling at all. Everything still required in this
-      # set runs on pull_request without one anyway - the s390x checks that did
-      # need it are the ones commented out just above.
-      # - ok-to-test
+    # No required-labels, and none coming: every check in this set runs on
+    # pull_request, on every push, fork or not. The self-hosted ones among them
+    # ran behind ok-to-test until now, which meant the checks least likely to be
+    # exercised anywhere else were also the ones a contributor could not get -
+    # see .github/workflows/static-checks-self-hosted.yaml. The trusted lane is
+    # the only set that waits on a label.
