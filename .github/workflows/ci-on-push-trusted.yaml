@@ -16,23 +16,23 @@ name: Kata Containers CI (trusted)
 #     is where the build scripts run - by far the largest body of code a pull
 #     request brings, and now none of it runs anywhere near a secret.
 #
-# What this lane does run is the pull request's own tests/, checked out at the
-# very commit the artifacts were built from, so that a pull request changing a
-# test and the code under it is exercised as one tree. That is what
-# allow-unsafe-pr-checkout on the suites' checkout is for, and it is a
-# deliberate exception rather than an oversight: ok-to-test is a maintainer
-# saying the diff has been read, which is exactly what the label has always
-# meant on the pull_request_target lane this replaces. The difference is that
-# the build no longer runs privileged, and only the suites that genuinely need a
-# cluster do.
+# What this lane does not do is run the suites itself. Calling them from here
+# would run the default branch's copy of every suite workflow, since that is
+# where a workflow_run resolves uses: ./ from, and a pull request changing a
+# suite would watch the old one pass. So the commit goes onto a ci/pr-<number>
+# branch of this repository and the suites are dispatched there, where the
+# workflow files are the pull request's - see dispatch-suites below and
+# .github/workflows/ci-pr-suites.yaml, which is where the price of that is
+# written down.
 #
 # So the lane only runs on a pull request labelled ok-to-test, and leaves its
 # status pending until then. Adding the label later does not start it - nothing
 # re-fires workflow_run - which is what /retest is for.
 #
-# The one thing that cannot be exercised from here is this lane's own workflow
-# files, since those are always the default branch's. Keep the YAML in this lane
-# thin and put the substance in tests/, which does come from the pull request.
+# What cannot be exercised from a pull request is this file, gatekeeper.yaml,
+# retest.yaml and revoke-ok-to-test.yaml: those four are always the default
+# branch's. Keep them thin, and put anything with substance in a suite the
+# dispatched lane runs, or in tests/.
 #
 # Because a workflow_run run is attributed to the default branch rather than to
 # the pull request, none of this shows up on the PR of its own accord. The lane
@@ -387,85 +387,188 @@ jobs:
           # arriving from two different lanes.
           publish kata-monitor.tar kata-monitor-ci
 
-  # The suites fetch their artifacts by name from the run they are part of, and
-  # the ones they want were uploaded to the untrusted run. Copying them over is
-  # what lets every suite workflow stay exactly as it is: teaching each of them
-  # to fetch from another run instead would mean an input, a token and a step in
-  # all of them, for the benefit of this lane alone.
+  # Where the suites are actually run, and the last piece this design was
+  # missing. Calling them from here with uses: ./ would run the default branch's
+  # copy of every suite workflow, because that is where a workflow_run resolves
+  # them from - so a pull request could change run-k8s-tests-on-aks.yaml and
+  # watch the old one pass. workflow_dispatch is the only trigger that reads its
+  # workflow file from a ref of one's choosing, and the ref has to be a branch
+  # here: refs/pull/N/head is refused.
   #
-  # Only small artifacts belong here. The image archives are big, and nothing
-  # downstream reads them from an artifact anyway - publish-images turns them
-  # into something the clusters can pull.
-  restage-artifacts:
-    name: restage-artifacts
-    needs: [resolve, wait-for-artifacts, authorise]
+  # So put the commit on a branch of this repository and dispatch there. What
+  # that gives up, and the settings it needs in exchange, is written down in
+  # .github/workflows/ci-pr-suites.yaml - read that before adding anything to it.
+  dispatch-suites:
+    name: dispatch-suites
+    needs: [resolve, wait-for-artifacts, authorise, publish-images]
     if: ${{ needs.resolve.outputs.proceed == 'true' }}
     runs-on: ubuntu-22.04
     permissions:
-      actions: read # needed to fetch the untrusted run's artifacts
+      actions: write # needed to dispatch the suites, and to read the run that starts
+      contents: write # needed to put the pull request's commit on a branch here
+      statuses: write # needed to point the pull request at the dispatched run
+    # The suites themselves are the long part; this job only watches them.
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # ci/ is deliberate: every push trigger in this repository filters on the
+      # default branch, so a branch under here starts nothing by existing. Keep
+      # it that way - a push filter that matches this prefix would run whatever
+      # it triggers on a fork's commit.
+      BRANCH: ci/pr-${{ needs.resolve.outputs.pr-number }}
+      WORKFLOW: ci-pr-suites.yaml
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - name: get-kata-tools-tarball
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: kata-tools-static-tarball-amd64${{ needs.resolve.outputs.tarball-suffix }}
-          path: restaged
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Put the pull request's commit on a branch of this repository
+        run: |
+          set -o errexit -o nounset -o pipefail
 
-      - name: store-artifact kata-tools-static-tarball-amd64
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: kata-tools-static-tarball-amd64${{ needs.resolve.outputs.tarball-suffix }}
-          # Named file rather than the directory, so the artifact keeps the shape
-          # the build gave it and a suite finds what it expects at the top.
-          path: restaged/kata-tools-static.tar.zst
-          # Nothing outside this run reads it, but a re-run of a suite days
-          # later is one of the things this run is re-run for, and it reads it.
-          retention-days: 7
-          # Already-compressed tarball; deflating it again costs time and saves
-          # close to nothing.
-          compression-level: 0
-          # The build having changed the layout under us should stop the lane
-          # here, not surface as a puzzling failure inside a suite.
-          if-no-files-found: error
+          # The commit itself, not a merge of it: it is the one the untrusted
+          # lane built these artifacts from, so the tests and the binaries under
+          # them come from one tree. The suites rebase onto the target branch
+          # themselves, which is where being up to date with it comes from.
+          #
+          # A fork's commit can be named here because an open pull request puts
+          # it in this repository already, as refs/pull/N/head.
+          if gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" > /dev/null 2>&1; then
+            # Force, because the branch is a pointer at whatever is being tested
+            # now and nothing reads its history. A pull request that was pushed
+            # to lands here again with an unrelated commit, by design.
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" \
+              --method PATCH --field sha="${HEAD_SHA}" --field force=true > /dev/null
+            echo "Moved ${BRANCH} to ${HEAD_SHA}"
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+              --method POST --field ref="refs/heads/${BRANCH}" --field sha="${HEAD_SHA}" > /dev/null
+            echo "Created ${BRANCH} at ${HEAD_SHA}"
+          fi
 
-  # The first suite to move. Its cluster is in Azure, so it cannot side-load an
-  # image the way the untrusted lane's suites do, and provisioning it needs
-  # credentials the untrusted lane will never hold.
-  run-k8s-tests-on-aks:
-    needs: [resolve, publish-images, restage-artifacts]
-    if: ${{ needs.resolve.outputs.proceed == 'true' }}
-    permissions:
-      contents: read # needed by the suite to check out the harness
-      id-token: write # needed for OIDC access to log into Azure
-    uses: ./.github/workflows/run-k8s-tests-on-aks.yaml
-    with:
-      tarball-suffix: ${{ needs.resolve.outputs.tarball-suffix }}
-      registry: ghcr.io
-      # TEMPORARY, sandbox only: the other half of the change in publish-images
-      # above - the images live under this repository's own package namespace
-      # here, so this is where the suite has to pull them from.
-      repo: ${{ github.repository }}/kata-deploy-ci
-      tag: ${{ needs.resolve.outputs.tag }}-amd64
-      # The pull request's own commit, and the same one the untrusted lane built
-      # these artifacts from, so the tests and the binaries beneath them come
-      # from one tree. A pull request that has to change both at once is
-      # therefore exercised here as it will be once merged.
-      commit-hash: ${{ github.event.workflow_run.head_sha }}
-      # Which actions/checkout refuses from v7 on, this being a workflow_run of
-      # a pull_request. Asking for it in as many words is the point: the label
-      # resolve checked is what stands behind it.
-      allow-unsafe-pr-checkout: true
-      pr-number: ${{ needs.resolve.outputs.pr-number }}
-      target-branch: ${{ needs.resolve.outputs.target-branch }}
-    secrets:
-      AZ_APPID: ${{ secrets.AZ_APPID }}
-      AZ_TENANT_ID: ${{ secrets.AZ_TENANT_ID }}
-      AZ_SUBSCRIPTION_ID: ${{ secrets.AZ_SUBSCRIPTION_ID }}
+      - name: Dispatch the suites on that branch
+        id: dispatch
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.pr-number }}
+          TARBALL_SUFFIX: ${{ needs.resolve.outputs.tarball-suffix }}
+          TAG: ${{ needs.resolve.outputs.tag }}-amd64
+          TARGET_BRANCH: ${{ needs.resolve.outputs.target-branch }}
+          ARTIFACT_RUN_ID: ${{ github.event.workflow_run.id }}
+          # TEMPORARY, sandbox only: the other half of the change in
+          # publish-images above - the images live under this repository's own
+          # package namespace here, so this is where the suites pull them from.
+          REPO: ${{ github.repository }}/kata-deploy-ci
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # Before dispatching, so that the search below cannot miss the run it
+          # is looking for. A minute back to allow for clock skew between here
+          # and the timestamps GitHub stamps runs with.
+          since="$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)"
+          echo "since=${since}" >> "${GITHUB_OUTPUT}"
+
+          jq -n \
+            --arg ref "${BRANCH}" \
+            --arg pr "${PR_NUMBER}" \
+            --arg suffix "${TARBALL_SUFFIX}" \
+            --arg repo "${REPO}" \
+            --arg tag "${TAG}" \
+            --arg target "${TARGET_BRANCH}" \
+            --arg run "${ARTIFACT_RUN_ID}" \
+            '{
+              ref: $ref,
+              inputs: {
+                "pr-number": $pr,
+                "tarball-suffix": $suffix,
+                registry: "ghcr.io",
+                repo: $repo,
+                tag: $tag,
+                "target-branch": $target,
+                "artifact-run-id": $run
+              }
+            }' \
+            | gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches" \
+              --method POST --input -
+
+          echo "Dispatched ${WORKFLOW} on ${BRANCH}"
+
+      - name: Find the run it started
+        id: run
+        env:
+          SINCE: ${{ steps.dispatch.outputs.since }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # The dispatch endpoint answers with nothing at all, so the run has to
+          # be looked for. Branch and event narrow it to this pull request, and
+          # this lane's concurrency group means only one of these is ever in
+          # flight for it, so the newest one since the dispatch is ours.
+          for _ in $(seq 60); do
+            id="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW}/runs?branch=${BRANCH}&event=workflow_dispatch&per_page=20" \
+              --jq "[.workflow_runs[] | select(.created_at >= \"${SINCE}\")] | sort_by(.created_at) | last | .id // empty")"
+
+            if [[ -n "${id:-}" ]]; then
+              echo "id=${id}" >> "${GITHUB_OUTPUT}"
+              echo "The suites are run by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${id}"
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo "::error::Dispatched ${WORKFLOW} on ${BRANCH} but no run appeared."
+          exit 1
+
+      - name: Point the pull request at it
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.run.outputs.id }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # The same context this lane's own status uses, on purpose: Gatekeeper
+          # follows every distinct run any status of that context points at, so
+          # this adds the dispatched run to what it collects rather than
+          # replacing the lane. /retest finds it the same way, which is what lets
+          # a maintainer re-run the suites without a fresh push.
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            --method POST \
+            --field state=pending \
+            --field context='Trusted CI lane' \
+            --field target_url="${RUN_URL}" \
+            --field description="Running the pull request's own suites"
+
+      - name: Wait for it, and answer for it
+        env:
+          RUN_ID: ${{ steps.run.outputs.id }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # This job stands in for the suites in every needs: list and in this
+          # run's conclusion, so it has to end the way they do. Without the wait
+          # the lane would report success for having asked.
+          deadline=$((SECONDS + 230 * 60))
+
+          while :; do
+            read -r status conclusion <<< "$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" \
+              --jq '"\(.status) \(.conclusion // "-")"')"
+
+            if [[ "${status}" == "completed" ]]; then
+              echo "The suites finished: ${conclusion}"
+              [[ "${conclusion}" == "success" ]] && exit 0
+              echo "::error::The dispatched suites concluded ${conclusion}."
+              exit 1
+            fi
+
+            if [[ "${SECONDS}" -ge "${deadline}" ]]; then
+              echo "::error::Gave up waiting for run ${RUN_ID}, which is still ${status}."
+              exit 1
+            fi
+
+            sleep 60
+          done
 
   report:
     name: report
-    needs: [resolve, wait-for-artifacts, authorise, publish-images, restage-artifacts, run-k8s-tests-on-aks]
+    needs: [resolve, wait-for-artifacts, authorise, publish-images, dispatch-suites]
     # always(), so that a failing suite still resolves the pending status the
     # resolve job left on the pull request.
     if: ${{ always() && needs.resolve.outputs.proceed == 'true' }}

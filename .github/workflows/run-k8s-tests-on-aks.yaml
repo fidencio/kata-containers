@@ -23,9 +23,11 @@ on:
       allow-unsafe-pr-checkout:
         # For a caller whose event is privileged and whose commit-hash is a
         # fork's: actions/checkout refuses that pairing from v7 on, and a caller
-        # that means it has to say so. Two do, both behind a maintainer's label:
-        # the trusted lane (ci-on-push-trusted.yaml) and, until it goes, the
-        # pull_request_target one, which reaches this suite through ci.yaml.
+        # that means it has to say so. One does - the pull_request_target lane,
+        # which reaches this suite through ci.yaml - and it goes when that lane
+        # does. The trusted lane needs nothing here: it dispatches this suite on
+        # a branch of this repository instead, so there is no fork ref to refuse
+        # (see .github/workflows/ci-pr-suites.yaml).
         required: false
         type: boolean
         default: false
