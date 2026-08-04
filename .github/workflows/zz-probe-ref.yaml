@@ -1,0 +1,56 @@
+name: zz probe ref creation
+
+on:
+  workflow_dispatch:
+    inputs:
+      fork-sha:
+        required: true
+        type: string
+      merge-sha:
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORK_SHA: ${{ inputs.fork-sha }}
+      MERGE_SHA: ${{ inputs.merge-sha }}
+      BASE_SHA: ${{ github.sha }}
+    steps:
+      - name: probe
+        run: |
+          try() {
+            local name="$1" sha="$2"
+            echo "=== TRY ${name} -> ${sha}"
+            if out="$(gh api "repos/${GITHUB_REPOSITORY}/git/refs" --method POST \
+                --field ref="refs/heads/${name}" --field sha="${sha}" 2>&1)"; then
+              echo "RESULT ${name}: CREATED"
+              gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/${name}" --method DELETE > /dev/null 2>&1 \
+                && echo "RESULT ${name}: cleaned up"
+            else
+              echo "RESULT ${name}: REFUSED -- ${out}"
+            fi
+          }
+
+          try zz-probe/base "${BASE_SHA}"
+          try zz-probe/merge "${MERGE_SHA}"
+          try zz-probe/fork "${FORK_SHA}"
+
+          echo "=== TRY synthetic commit carrying the fork's tree onto main"
+          tree="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${FORK_SHA}" --jq '.tree.sha' 2>&1)" \
+            && echo "tree=${tree}" || echo "reading the fork commit REFUSED: ${tree}"
+
+          if synth="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits" --method POST \
+              --field message="probe" --field tree="${tree}" \
+              --field 'parents[]'="${BASE_SHA}" --jq '.sha' 2>&1)"; then
+            echo "RESULT synthetic commit: CREATED ${synth}"
+            try zz-probe/synthetic "${synth}"
+          else
+            echo "RESULT synthetic commit: REFUSED -- ${synth}"
+          fi
