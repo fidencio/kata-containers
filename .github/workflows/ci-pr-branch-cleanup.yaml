@@ -1,0 +1,47 @@
+name: ci branch cleanup
+
+# The trusted lane puts a pull request's commit on a ci/pr-<number> branch of
+# this repository, because that is the only way to dispatch the pull request's
+# own suite workflows - see .github/workflows/ci-pr-suites.yaml. This deletes it
+# once the pull request is done with.
+#
+# It is not deleted after each run on purpose: re-running the dispatched suites,
+# which is what /retest does, needs the branch the run was dispatched on to still
+# be there.
+#
+# Nothing is checked out here and the branch name is built from a number, so the
+# privileged trigger buys exactly one DELETE.
+
+on:
+  # zizmor: ignore[dangerous-triggers]
+  # Privileged because deleting a branch takes write access. Nothing from the
+  # event reaches a shell except a pull request number.
+  pull_request_target:
+    types:
+      - closed
+
+permissions: {}
+
+jobs:
+  delete-branch:
+    name: delete-branch
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # needed to delete the branch
+    steps:
+      - name: Delete the branch the suites were dispatched on
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ci/pr-${{ github.event.pull_request.number }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          # Most pull requests never get one: the branch only appears once the
+          # trusted lane has something to dispatch, which takes a label.
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" > /dev/null 2>&1; then
+            echo "No ${BRANCH} to delete."
+            exit 0
+          fi
+
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" --method DELETE
+          echo "Deleted ${BRANCH}."
