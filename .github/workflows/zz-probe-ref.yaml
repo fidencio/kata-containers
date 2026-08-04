@@ -3,10 +3,7 @@ name: zz probe ref creation
 on:
   workflow_dispatch:
     inputs:
-      fork-sha:
-        required: true
-        type: string
-      merge-sha:
+      old-sha:
         required: true
         type: string
 
@@ -17,10 +14,10 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      actions: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      FORK_SHA: ${{ inputs.fork-sha }}
-      MERGE_SHA: ${{ inputs.merge-sha }}
+      OLD_SHA: ${{ inputs.old-sha }}
       BASE_SHA: ${{ github.sha }}
     steps:
       - name: probe
@@ -34,23 +31,35 @@ jobs:
               gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/${name}" --method DELETE > /dev/null 2>&1 \
                 && echo "RESULT ${name}: cleaned up"
             else
-              echo "RESULT ${name}: REFUSED -- ${out}"
+              echo "RESULT ${name}: REFUSED -- $(tr -d '\n' <<< "${out}")"
             fi
           }
 
-          try zz-probe/base "${BASE_SHA}"
-          try zz-probe/merge "${MERGE_SHA}"
-          try zz-probe/fork "${FORK_SHA}"
+          # A commit that introduces nothing at all: same tree as the branch it
+          # is parented on. Unreachable from any ref, and touching no workflow
+          # file. Which of those two the block is about is the question.
+          tree="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${BASE_SHA}" --jq '.tree.sha')"
+          empty="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits" --method POST \
+            --field message="probe: no change at all" --field tree="${tree}" \
+            --field 'parents[]'="${BASE_SHA}" --jq '.sha')"
+          echo "empty-change commit ${empty}"
+          try zz-probe/no-change "${empty}"
 
-          echo "=== TRY synthetic commit carrying the fork's tree onto main"
-          tree="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${FORK_SHA}" --jq '.tree.sha' 2>&1)" \
-            && echo "tree=${tree}" || echo "reading the fork commit REFUSED: ${tree}"
+          # A commit from the pull request that predates its workflow edits.
+          try zz-probe/old-pr-commit "${OLD_SHA}"
 
-          if synth="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits" --method POST \
-              --field message="probe" --field tree="${tree}" \
-              --field 'parents[]'="${BASE_SHA}" --jq '.sha' 2>&1)"; then
-            echo "RESULT synthetic commit: CREATED ${synth}"
-            try zz-probe/synthetic "${synth}"
+          echo "=== TRY dispatching another workflow with GITHUB_TOKEN"
+          before="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/actionlint.yaml/runs?per_page=1" --jq '.workflow_runs[0].id // 0')"
+          if out="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/actionlint.yaml/dispatches" \
+              --method POST --field ref=main 2>&1)"; then
+            echo "RESULT dispatch call: ACCEPTED"
+            sleep 20
+            after="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/actionlint.yaml/runs?per_page=1" --jq '.workflow_runs[0].id // 0')"
+            if [[ "${after}" != "${before}" ]]; then
+              echo "RESULT dispatch: RAN as ${after}"
+            else
+              echo "RESULT dispatch: NO RUN APPEARED (newest is still ${before})"
+            fi
           else
-            echo "RESULT synthetic commit: REFUSED -- ${synth}"
+            echo "RESULT dispatch call: REFUSED -- $(tr -d '\n' <<< "${out}")"
           fi
