@@ -130,11 +130,17 @@ mapping:
       # own commit, which is why the prefix is that workflow's name and not the
       # trusted lane's. Gatekeeper reaches them through the same pointer status:
       # the lane points at both its own run and the dispatched one.
-      - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, normal)
-      - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, containerd)
+      #
+      # TEMPORARY, and the other half of this branch's trimmed matrix in
+      # run-k8s-tests-on-aks.yaml: one cluster is enough to watch the mechanism
+      # work, and the four names below it cost an hour of waiting each time,
+      # Gatekeeper treating a name it has not seen as a job still to come. The
+      # two go back together.
       - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, oci-distribution)
-      - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, small)
-      - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, normal)
+      # - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, normal)
+      # - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure, small, containerd)
+      # - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, small)
+      # - Kata Containers CI (dispatched) / run-k8s-tests-on-aks / run-k8s-tests (cbl-mariner, clh-azure-runtime-rs, normal)
     required-labels:
       - ok-to-test
   test-prt:
