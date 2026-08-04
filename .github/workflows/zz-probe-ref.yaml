@@ -8,18 +8,17 @@ permissions: {}
 jobs:
   probe:
     runs-on: ubuntu-22.04
-    environment:
-      name: zz-probe-env
-      deployment: false
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Can this ref reach the environment's secret?
-        env:
-          SECRET: ${{ secrets.ZZ_PROBE_SECRET }}
+      - name: Can the Actions token delete a branch carrying workflow changes?
         run: |
           set -o errexit -o nounset -o pipefail
-          echo "ref=${GITHUB_REF}"
-          if [[ -n "${SECRET:-}" ]]; then
-            echo "RESULT: the environment secret IS readable here"
+          if out="$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/zz-probe/delete-me" \
+              --method DELETE 2>&1)"; then
+            echo "RESULT delete: ALLOWED"
           else
-            echo "RESULT: the environment secret is EMPTY here"
+            echo "RESULT delete: REFUSED -- $(tr -d '\n' <<< "${out}")"
           fi
