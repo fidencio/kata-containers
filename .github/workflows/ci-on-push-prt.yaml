@@ -47,6 +47,9 @@ jobs:
       tag: ${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
       target-branch: ${{ github.event.pull_request.base.ref }}
       skip-test: ${{ needs.skipper.outputs.skip_test }}
+      # This is a pull request, so the TEE machines are not spent until the
+      # non-TEE tier has passed. Nightly and devel leave this alone.
+      gate-tee-on-nontee: true
     secrets:
       AUTHENTICATED_IMAGE_PASSWORD: ${{ secrets.AUTHENTICATED_IMAGE_PASSWORD }}
       AZ_APPID: ${{ secrets.AZ_APPID }}

@@ -32,6 +32,13 @@ on:
         required: false
         type: string
         default: small
+      gate-tee-on-nontee:
+        # Whether a failing non-TEE run stops the TEE one from starting at all.
+        # A pull request wants that, and a nightly does not - see the note on
+        # run-k8s-tests-on-tee below.
+        required: false
+        type: boolean
+        default: false
     secrets:
       AUTHENTICATED_IMAGE_PASSWORD:
         required: true
@@ -51,6 +58,27 @@ permissions: {}
 jobs:
   run-k8s-tests-on-tee:
     name: run-k8s-tests-on-tee
+    # TDX and SNP machines are the scarcest thing this project has, and the
+    # non-TEE tier below exercises most of the same code on a runner GitHub
+    # hands out for free. So on a pull request this waits for it: the ordering
+    # comes from needs, and the condition decides whether a failure actually
+    # holds it back. A nightly leaves gate-tee-on-nontee alone, so it waits the
+    # same but is stopped by nothing: losing a night of TDX and SNP coverage to
+    # one non-TEE flake costs more than the machines do. What that waiting costs
+    # a nightly is a later start, about as long as the non-TEE tier takes.
+    #
+    # Only the plain non-TEE job gates. The erofs variants are a snapshotter
+    # matrix whose failures say nothing about whether TDX or SNP will work, and
+    # waiting for the slowest of four of them would delay this tier without
+    # telling anyone anything. Add them here if that stops being true.
+    needs: run-k8s-tests-coco-nontee
+    # A skipped dependency is not a failed one: a non-TEE job that never ran has
+    # nothing to say about this one, so only a real failure holds it back.
+    if: >-
+      ${{ !cancelled()
+        && (!inputs.gate-tee-on-nontee
+            || (needs.run-k8s-tests-coco-nontee.result != 'failure'
+                && needs.run-k8s-tests-coco-nontee.result != 'cancelled')) }}
     strategy:
       fail-fast: false
       matrix:
