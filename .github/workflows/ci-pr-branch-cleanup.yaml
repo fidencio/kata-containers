@@ -26,6 +26,12 @@ on:
 
 permissions: {}
 
+concurrency:
+  # Not cancel-in-progress: a cancelled delete leaves the branch behind, and
+  # nothing comes along later to try again. Closing a pull request twice is rare
+  # enough that letting the second wait for the first costs nothing.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+
 jobs:
   delete-branch:
     name: delete-branch
