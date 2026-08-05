@@ -1,0 +1,147 @@
+name: CI | Wait for jobs of another run
+
+# Waits for named jobs of another workflow run to pass, so that a suite running
+# on hardware this project is short of is not started until the cheap tier that
+# covers the same ground has come back green.
+#
+# Within one run this is not needed: needs: does it, and does it better - see
+# run-k8s-tests-on-tee in run-kata-coco-tests.yaml, which waits for the non-TEE
+# tier that way. This is for the case needs: cannot reach, where the two tiers
+# are in different runs because they belong to different lanes. The dispatched
+# lane is handed the untrusted lane's run as artifact-run-id, which is what to
+# pass as run-id here, and the untrusted lane is where every free-runner tier
+# lives (nvidia-cpu on x86_64, for one).
+#
+# Nothing is checked out and no secret is needed: this only reads the jobs of a
+# run of this repository.
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: |
+          What this gate is waiting on, in a word - "nvidia-cpu-amd64", say. It
+          names the concurrency group, and two gates of one run that share a
+          group would take turns instead of waiting side by side, so give each
+          one its own.
+        required: true
+        type: string
+      run-id:
+        description: The run whose jobs to wait for
+        required: true
+        type: string
+      jobs:
+        description: |
+          Job names to wait for, one per line, matched as shell globs against
+          the names that run reports. A matrix leaf is named
+          "caller-job / leaf-job (matrix, values)", so a trailing * is usually
+          what you want:
+
+            run-k8s-tests-on-free-runner / run-k8s-tests (qemu-nvidia-cpu*
+
+          Every pattern has to match at least one job. One that matches nothing
+          by the time that run is over is an error rather than a pass, because a
+          gate that silently waits for a job somebody renamed is a gate that
+          stopped gating.
+        required: true
+        type: string
+      timeout-minutes:
+        description: How long to wait before giving up on the jobs arriving
+        required: false
+        type: number
+        default: 120
+      poll-seconds:
+        required: false
+        type: number
+        default: 60
+
+concurrency:
+  # github.run_id is the calling lane's run, and inputs.name tells one gate of
+  # that run from another. Cancelling in progress then only ever reaches a gate
+  # left over from an earlier attempt of the same run.
+  group: ${{ github.workflow }}-${{ github.run_id }}-wait-${{ inputs.name }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  wait:
+    name: wait
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read # needed to read the other run and its jobs
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Wait for the jobs this suite depends on
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GATE: ${{ inputs.name }}
+          RUN_ID: ${{ inputs.run-id }}
+          PATTERNS: ${{ inputs.jobs }}
+          POLL_SECONDS: ${{ inputs.poll-seconds }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+
+          mapfile -t patterns < <(printf '%s\n' "${PATTERNS}" | sed '/^[[:space:]]*$/d')
+          if [[ "${#patterns[@]}" -eq 0 ]]; then
+            echo "::error::No job names were given to wait for."
+            exit 1
+          fi
+
+          echo "${GATE}: waiting on ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID} for:"
+          printf '  %s\n' "${patterns[@]}"
+
+          while :; do
+            run_status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.status')"
+            jobs="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+              --jq '.jobs[] | [.name, .status, .conclusion // "-", .html_url] | @tsv')"
+
+            waiting=()
+            failed=()
+            passed=0
+
+            for pattern in "${patterns[@]}"; do
+              matched=0
+              while IFS=$'\t' read -r name status conclusion url; do
+                [[ -n "${name:-}" ]] || continue
+                # Unquoted on purpose: the pattern is a glob. [[ ]] does not
+                # word-split, so names and patterns with spaces are safe.
+                # shellcheck disable=SC2053
+                [[ "${name}" == ${pattern} ]] || continue
+                matched=1
+                if [[ "${status}" != "completed" ]]; then
+                  waiting+=("${name} (${status})")
+                elif [[ "${conclusion}" != "success" ]]; then
+                  # skipped counts as a failure here, unlike in a needs:
+                  # condition: a tier that was asked for and did not run leaves
+                  # the expensive one with nothing behind it.
+                  failed+=("${name} - ${conclusion} ${url}")
+                else
+                  passed=$((passed + 1))
+                fi
+              done <<< "${jobs}"
+
+              if [[ "${matched}" -eq 0 ]]; then
+                if [[ "${run_status}" == "completed" ]]; then
+                  failed+=("no job of run ${RUN_ID} matched '${pattern}'")
+                else
+                  waiting+=("nothing matches '${pattern}' yet")
+                fi
+              fi
+            done
+
+            if [[ "${#failed[@]}" -gt 0 ]]; then
+              printf '::error::%s\n' "${failed[@]}"
+              echo "Not starting: the tier this suite waits on did not pass."
+              exit 1
+            fi
+
+            if [[ "${#waiting[@]}" -eq 0 ]]; then
+              echo "All ${passed} awaited jobs passed."
+              exit 0
+            fi
+
+            echo "Still waiting on ${#waiting[@]}, ${passed} passed so far:"
+            printf '  %s\n' "${waiting[@]}"
+            sleep "${POLL_SECONDS}"
+          done
