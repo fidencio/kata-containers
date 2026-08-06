@@ -1,20 +1,31 @@
 name: retest
 
-# A maintainer commenting /retest on a pull request re-runs whatever did not
-# pass, across every lane at once, without asking the author for a fresh push.
+# Starts runs again that nothing else can start. Two things ask for it:
 #
-# It exists because there is no other way to get some of this going again. The
-# trusted lane is started by a workflow_run event that only fires when the
-# untrusted lane is first requested, so neither re-running the untrusted lane
-# nor adding the ok-to-test label to a pull request starts it; and Gatekeeper
-# only re-evaluates on pull request events, so a lane that goes green after a
-# re-run leaves Gatekeeper red until it is re-run too.
+#   /retest from a maintainer  - re-runs whatever did not pass, every lane at
+#                                once, without asking the author to push again
+#   ok-to-test being added     - starts the lane that was waiting for it, and
+#                                only that: a check that failed on its own
+#                                merits is not the label's business
 #
-# issue_comment is privileged - it runs with this repository's secrets - and the
-# same two properties that make the trusted lane safe hold here: the workflow
-# file is always the default branch's, and nothing in it checks out the pull
-# request. The only thing taken from the comment is whether it begins with
-# /retest, decided in an expression; the body never reaches a shell.
+# Both exist because the trusted lane is started by a workflow_run event that
+# fires only when the untrusted lane is first requested. Neither re-running the
+# untrusted lane nor labelling the pull request produces that event, so a lane
+# labelled after the fact would otherwise sit there having decided, correctly at
+# the time, that it had no label. Gatekeeper is in the same position: it only
+# re-evaluates on pull request events, and it gives up at once on a missing
+# label, so it has to be sent round again too.
+#
+# Both triggers are privileged - they run with this repository's secrets - and
+# the same two properties that make the trusted lane safe hold here: the
+# workflow file is always the default branch's, and nothing in it checks out the
+# pull request. Nothing from either payload reaches a shell: the comment is
+# tested for its /retest prefix in an expression, and the label is matched by
+# name in one.
+#
+# Who may do this is not checked for the label, because GitHub has already
+# checked it - adding a label to a pull request needs write access to this
+# repository. A comment needs the check, and gets one.
 
 on:
   # zizmor: ignore[dangerous-triggers]
@@ -22,20 +33,31 @@ on:
   issue_comment:
     types:
       - created
+  # zizmor: ignore[dangerous-triggers]
+  pull_request_target:
+    types:
+      - labeled
 
 permissions: {}
 
 concurrency:
   # Not cancel-in-progress: this job re-runs other runs, and being killed
   # halfway through leaves some lanes started and others not.
-  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}
 
 jobs:
   retest:
     name: retest
     # An issue_comment fires for issues too, and github.event.issue.pull_request
-    # is the only thing in the payload that tells the two apart.
-    if: ${{ github.event.issue.pull_request && github.event.issue.state == 'open' && startsWith(github.event.comment.body, '/retest') }}
+    # is the only thing in the payload that tells the two apart. A label event
+    # is a pull request's by definition, and only one label means anything here.
+    if: >-
+      ${{ (github.event_name == 'issue_comment'
+            && github.event.issue.pull_request
+            && github.event.issue.state == 'open'
+            && startsWith(github.event.comment.body, '/retest'))
+        || (github.event_name == 'pull_request_target'
+            && github.event.label.name == 'ok-to-test') }}
     runs-on: ubuntu-22.04
     permissions:
       actions: write # needed to re-run the runs
@@ -46,7 +68,7 @@ jobs:
       pull-requests: write # needed to react to the comment, and to read the head commit
       statuses: read # needed to follow the trusted lane's pointer to its run
     steps:
-      - name: Check that the comment came from someone who may already do this
+      - name: Check that this came from someone who may already do this
         id: authorised
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -54,8 +76,10 @@ jobs:
           # GitHub works this out for us, which is the whole reason to use it:
           # OWNER, MEMBER and COLLABORATOR are exactly the people who can
           # already press "Re-run jobs" in the web interface, and no token this
-          # workflow could hold is able to read organisation membership.
-          AUTHORISED: ${{ contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) }}
+          # workflow could hold is able to read organisation membership. A label
+          # event needs none of it - GitHub would not have accepted the label
+          # from anyone without write access.
+          AUTHORISED: ${{ github.event_name == 'pull_request_target' || contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) }}
           ASSOCIATION: ${{ github.event.comment.author_association }}
         run: |
           set -o errexit -o nounset -o pipefail
@@ -72,7 +96,9 @@ jobs:
           echo "authorised=${AUTHORISED}" >> "${GITHUB_OUTPUT}"
 
       - name: Acknowledge the request
-        if: ${{ steps.authorised.outputs.authorised == 'true' }}
+        # A label acknowledges itself: it is visible on the pull request, and
+        # there is nothing to react to.
+        if: ${{ steps.authorised.outputs.authorised == 'true' && github.event_name == 'issue_comment' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_ID: ${{ github.event.comment.id }}
@@ -84,11 +110,15 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             --method POST --field content='rocket' > /dev/null
 
-      - name: Re-run everything that did not pass
+      - name: Re-run what was asked for
         if: ${{ steps.authorised.outputs.authorised == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          # A label starts only what was waiting for a label. A comment means
+          # everything that did not pass.
+          ONLY_WAITING_ON_THE_LABEL: ${{ github.event_name == 'pull_request_target' }}
+          TITLE: ${{ github.event_name == 'pull_request_target' && 'ok-to-test' || '/retest' }}
           # Keep in step with the trusted lane and with
           # tools/testing/gatekeeper/jobs.py: all three match this literally.
           POINTER_CONTEXT: Trusted CI lane
@@ -187,13 +217,22 @@ jobs:
             fi
           }
 
-          echo "## /retest" >> "${GITHUB_STEP_SUMMARY}"
+          echo "## ${TITLE}" >> "${GITHUB_STEP_SUMMARY}"
 
           gatekeeper=""
           while IFS=$'\t' read -r id name status conclusion pointer; do
             [[ -n "${id:-}" ]] || continue
             if [[ "${name}" == "${GATEKEEPER_WORKFLOW}" ]]; then
               gatekeeper="${id}"$'\t'"${status}"$'\t'"${conclusion}"$'\t'"${pointer}"
+              continue
+            fi
+            # A pending pointer is what a lane that stopped for want of the
+            # label looks like, and after labelling it is the only thing worth
+            # starting: a static check that failed on its own is not something
+            # the label has anything to say about. Gatekeeper is the exception
+            # and is dealt with below - it failed on the label, so it goes again
+            # either way.
+            if [[ "${ONLY_WAITING_ON_THE_LABEL}" == "true" && "${pointer}" != "pending" ]]; then
               continue
             fi
             consider "${id}" "${name}" "${status}" "${conclusion}" "${pointer}"
