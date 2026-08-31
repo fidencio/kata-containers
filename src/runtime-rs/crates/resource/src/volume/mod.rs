@@ -8,6 +8,7 @@ pub(crate) mod block_emptydir_volume;
 mod block_volume;
 mod default_volume;
 mod ephemeral_volume;
+pub mod erofs_volume;
 pub mod hugepage;
 mod local_volume;
 mod share_fs_volume;
@@ -40,6 +41,7 @@ pub struct VolumeContext<'a> {
     pub emptydir_mode: &'a str,
     pub fs_sharing_supported: bool,
     pub block_device_discard_supported: bool,
+    pub erofs_volumes: bool,
 }
 
 #[async_trait]
@@ -156,18 +158,38 @@ impl VolumeResource {
                         .with_context(|| format!("handle hugepages {m:?}"))?,
                 )
             } else if share_fs_volume::is_share_fs_volume(m) {
-                Arc::new(
-                    share_fs_volume::ShareFsVolume::new(
-                        share_fs,
-                        m,
-                        cid,
-                        read_only,
-                        ctx.agent.clone(),
-                        self.volume_manager.clone(),
-                    )
-                    .await
-                    .with_context(|| format!("new share fs volume {m:?}"))?,
-                )
+                let mut volume: Option<Arc<dyn Volume>> = None;
+
+                if ctx.erofs_volumes
+                    && share_fs.is_none()
+                    && erofs_volume::is_erofs_candidate(m, read_only)
+                {
+                    match erofs_volume::ErofsVolume::new(d, m, sid, cid).await {
+                        Ok(v) => volume = Some(Arc::new(v)),
+                        Err(e) => warn!(
+                            sl!(),
+                            "erofs volume for {:?} failed, falling back to copy_file: {:?}",
+                            m.destination(),
+                            e
+                        ),
+                    }
+                }
+
+                match volume {
+                    Some(v) => v,
+                    None => Arc::new(
+                        share_fs_volume::ShareFsVolume::new(
+                            share_fs,
+                            m,
+                            cid,
+                            read_only,
+                            ctx.agent.clone(),
+                            self.volume_manager.clone(),
+                        )
+                        .await
+                        .with_context(|| format!("new share fs volume {m:?}"))?,
+                    ),
+                }
             } else if is_skip_volume(m) {
                 info!(sl!(), "skip volume {:?}", m);
                 continue;
