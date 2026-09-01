@@ -118,11 +118,7 @@ impl ErofsVolume {
 
         // A host-built image could otherwise smuggle in setuid binaries or
         // device nodes. Not noexec: configmaps legitimately carry scripts.
-        let mount_options = [
-            "ro".to_string(),
-            "nosuid".to_string(),
-            "nodev".to_string(),
-        ];
+        let mount_options = ["ro".to_string(), "nosuid".to_string(), "nodev".to_string()];
         let (storage, mut mount, device_id) = handle_block_volume(
             device_info,
             m,
