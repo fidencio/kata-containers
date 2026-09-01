@@ -1154,12 +1154,18 @@ impl Sandbox for VirtSandbox {
             .await
             .context("create sandbox")?;
 
-        // A non-empty dns list means the agent has just written the sandbox
-        // resolv.conf, which the containers can then share instead of each
-        // being handed its own copy over copy_file.
-        self.resource_manager
-            .set_sandbox_dns(!sandbox_config.dns.is_empty())
-            .await;
+        // The agent has just materialised a file for each of these out of the
+        // request, so the containers can share those instead of each being
+        // handed its own copy over copy_file. Only for the fields we actually
+        // populated: given nothing, the agent writes nothing.
+        let mut sandbox_files = Vec::new();
+        if !sandbox_config.dns.is_empty() {
+            sandbox_files.push("/etc/resolv.conf".to_string());
+        }
+        if !sandbox_config.hostname.is_empty() {
+            sandbox_files.push("/etc/hostname".to_string());
+        }
+        self.resource_manager.set_sandbox_files(sandbox_files).await;
 
         inner.state = SandboxState::Running;
         inner.created_at = Some(std::time::SystemTime::now());

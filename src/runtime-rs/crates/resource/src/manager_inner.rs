@@ -61,7 +61,7 @@ pub(crate) struct ResourceManagerInner {
     network: Option<Arc<dyn Network>>,
     share_fs: Option<Arc<dyn ShareFs>>,
     nydus_share_fs: Option<Arc<dyn NydusShareFs>>,
-    sandbox_dns: bool,
+    sandbox_files: Vec<String>,
 
     pub rootfs_resource: RootFsResource,
     pub volume_resource: VolumeResource,
@@ -134,7 +134,7 @@ impl ResourceManagerInner {
             network: None,
             share_fs: None,
             nydus_share_fs: None,
-            sandbox_dns: false,
+            sandbox_files: Vec::new(),
             rootfs_resource: RootFsResource::new(),
             volume_resource: VolumeResource::new(),
             cgroups_resource,
@@ -148,8 +148,8 @@ impl ResourceManagerInner {
         self.toml_config.clone()
     }
 
-    pub(crate) fn set_sandbox_dns(&mut self, sandbox_dns: bool) {
-        self.sandbox_dns = sandbox_dns;
+    pub(crate) fn set_sandbox_files(&mut self, sandbox_files: Vec<String>) {
+        self.sandbox_files = sandbox_files;
     }
 
     pub fn get_device_manager(&self) -> Arc<RwLock<DeviceManager>> {
@@ -519,7 +519,7 @@ impl ResourceManagerInner {
                 .toml_config
                 .runtime
                 .is_experiment_enabled(EROFS_VOLUMES_FEATURE),
-            sandbox_dns: self.sandbox_dns,
+            sandbox_files: &self.sandbox_files,
         };
         self.volume_resource.handler_volumes(&ctx, cid, spec).await
     }
@@ -1152,7 +1152,7 @@ impl Persist for ResourceManagerInner {
             network: None,
             share_fs: None,
             nydus_share_fs: None,
-            sandbox_dns: false,
+            sandbox_files: Vec::new(),
             rootfs_resource: RootFsResource::new(),
             volume_resource: VolumeResource::new(),
             cgroups_resource: CgroupsResource::restore(

@@ -68,9 +68,9 @@ impl ResourceManager {
         inner.config()
     }
 
-    pub async fn set_sandbox_dns(&self, sandbox_dns: bool) {
+    pub async fn set_sandbox_files(&self, sandbox_files: Vec<String>) {
         let mut inner = self.inner.write().await;
-        inner.set_sandbox_dns(sandbox_dns);
+        inner.set_sandbox_files(sandbox_files);
     }
 
     pub async fn get_device_manager(&self) -> Arc<RwLock<DeviceManager>> {
