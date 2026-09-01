@@ -11,6 +11,7 @@ mod ephemeral_volume;
 pub mod erofs_volume;
 pub mod hugepage;
 mod local_volume;
+mod sandbox_dns_volume;
 mod share_fs_volume;
 mod shm_volume;
 pub mod utils;
@@ -42,6 +43,9 @@ pub struct VolumeContext<'a> {
     pub fs_sharing_supported: bool,
     pub block_device_discard_supported: bool,
     pub erofs_volumes: bool,
+    /// Whether the agent was given a `dns` list at create_sandbox, and so has
+    /// written the sandbox resolv.conf the containers can share.
+    pub sandbox_dns: bool,
 }
 
 #[async_trait]
@@ -156,6 +160,16 @@ impl VolumeResource {
                 Arc::new(
                     hugepage::Hugepage::new(m, hugepage_limits, options)
                         .with_context(|| format!("handle hugepages {m:?}"))?,
+                )
+            } else if ctx.sandbox_dns
+                && share_fs.is_none()
+                && sandbox_dns_volume::is_sandbox_dns_mount(m)
+            {
+                // Nothing to transfer: the agent wrote this file itself during
+                // create_sandbox, so the container just points at it.
+                Arc::new(
+                    sandbox_dns_volume::SandboxDnsVolume::new(m)
+                        .with_context(|| format!("new sandbox dns volume {m:?}"))?,
                 )
             } else if share_fs_volume::is_share_fs_volume(m) {
                 let mut volume: Option<Arc<dyn Volume>> = None;

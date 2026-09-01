@@ -1154,6 +1154,13 @@ impl Sandbox for VirtSandbox {
             .await
             .context("create sandbox")?;
 
+        // A non-empty dns list means the agent has just written the sandbox
+        // resolv.conf, which the containers can then share instead of each
+        // being handed its own copy over copy_file.
+        self.resource_manager
+            .set_sandbox_dns(!sandbox_config.dns.is_empty())
+            .await;
+
         inner.state = SandboxState::Running;
         inner.created_at = Some(std::time::SystemTime::now());
 
