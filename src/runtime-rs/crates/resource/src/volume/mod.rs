@@ -168,7 +168,8 @@ impl VolumeResource {
                 // Nothing to transfer: the agent wrote this file itself during
                 // create_sandbox, so the container just points at it.
                 Arc::new(
-                    sandbox_file_volume::SandboxFileVolume::new(m)
+                    sandbox_file_volume::SandboxFileVolume::new(m, ctx.agent.clone())
+                        .await
                         .with_context(|| format!("new sandbox file volume {m:?}"))?,
                 )
             } else if share_fs_volume::is_share_fs_volume(m) {

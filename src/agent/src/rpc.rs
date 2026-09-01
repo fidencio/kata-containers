@@ -1588,6 +1588,19 @@ impl agent_ttrpc::AgentService for AgentService {
         Ok(Empty::new())
     }
 
+    async fn set_sandbox_hosts(
+        &self,
+        ctx: &TtrpcContext,
+        req: protocols::agent::SetSandboxHostsRequest,
+    ) -> ttrpc::Result<Empty> {
+        trace_rpc_call!(ctx, "set_sandbox_hosts", req);
+        is_allowed(&req).await?;
+
+        setup_guest_hosts(&req.hosts).map_ttrpc_err(same)?;
+
+        Ok(Empty::new())
+    }
+
     async fn destroy_sandbox(
         &self,
         ctx: &TtrpcContext,
@@ -2577,11 +2590,34 @@ fn setup_guest_hostname(hostname: &str) -> Result<()> {
         return Ok(());
     }
 
+    // Trailing newline to match what containerd writes on the host.
+    write_sandbox_file("hostname", &format!("{hostname}\n"))
+}
+
+// Same idea for the pod's hosts file, except the runtime has to hand this one
+// over separately: the host only names it in a container spec, long after
+// create_sandbox.
+fn setup_guest_hosts(hosts: &[String]) -> Result<()> {
+    if hosts.is_empty() {
+        return Ok(());
+    }
+
+    let mut content = hosts.join("\n");
+    content.push('\n');
+
+    write_sandbox_file("hosts", &content)
+}
+
+// Written by rename so a container that is already sharing the file cannot
+// observe a partially written one, since the runtime may hand us the same
+// content again for a second container.
+fn write_sandbox_file(name: &str, content: &str) -> Result<()> {
     let dir = Path::new(KATA_GUEST_SANDBOX_DIR);
     fs::create_dir_all(dir)?;
 
-    // Trailing newline to match what containerd writes on the host.
-    fs::write(dir.join("hostname"), format!("{hostname}\n"))?;
+    let tmp = dir.join(format!(".{name}.tmp"));
+    fs::write(&tmp, content)?;
+    fs::rename(&tmp, dir.join(name))?;
 
     Ok(())
 }
