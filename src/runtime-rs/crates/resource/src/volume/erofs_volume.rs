@@ -77,8 +77,7 @@ impl ErofsVolume {
             .await
             .with_context(|| format!("build erofs image for {source}"))?;
 
-        // Any failure past this point falls back to copy_file, so the image
-        // must not outlive the attempt.
+        // Nothing cleans up after a volume that was never returned.
         let volume = Self::attach(d, m, sid, &src, &entry_name, &image_path).await;
         if volume.is_err() {
             remove_image(&image_path);
