@@ -2838,12 +2838,9 @@ async fn cdh_handler_sealed_secrets(cid: &str, oci: &mut Spec) -> Result<()> {
         .ok_or_else(|| anyhow!("Spec didn't contain process field"))?;
     if let Some(envs) = process.env_mut().as_mut() {
         for env in envs.iter_mut() {
-            match confidential_data_hub::unseal_env(env).await {
-                Ok(unsealed_env) => *env = unsealed_env.to_string(),
-                Err(e) => {
-                    warn!(sl(), "Failed to unseal secret: {}", e)
-                }
-            }
+            *env = confidential_data_hub::unseal_env(env)
+                .await
+                .context("unseal environment variable")?;
         }
     }
 
@@ -2874,15 +2871,11 @@ async fn cdh_handler_sealed_secrets(cid: &str, oci: &mut Spec) -> Result<()> {
             // Every file has to be read: nothing short of the content says
             // whether a volume holds a sealed secret.
             let dst = unsealed_dir(cid, source_path)?;
-            match confidential_data_hub::unseal_files_into(Path::new(source_path), &dst).await {
-                Ok(true) => {
-                    m.set_source(Some(dst));
-                }
-                Ok(false) => {}
-                Err(e) => warn!(
-                    sl(),
-                    "Failed to unseal file: {:?}, Error: {:?}", source_path, e
-                ),
+            if confidential_data_hub::unseal_files_into(Path::new(source_path), &dst)
+                .await
+                .with_context(|| format!("unseal {source_path}"))?
+            {
+                m.set_source(Some(dst));
             }
         }
     }
