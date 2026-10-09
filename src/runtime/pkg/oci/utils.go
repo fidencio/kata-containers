@@ -27,7 +27,6 @@ import (
 	"syscall"
 
 	"github.com/BurntSushi/toml"
-	ctrAnnotations "github.com/containerd/containerd/pkg/cri/annotations"
 	crioAnnotations "github.com/cri-o/cri-o/pkg/annotations"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
@@ -40,6 +39,7 @@ import (
 	kataTypes "github.com/kata-containers/kata-containers/src/runtime/pkg/types"
 	exp "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/experimental"
 	vcAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations"
+	ctrAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations/containerd"
 	dockershimAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations/dockershim"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
 	vcutils "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/utils"

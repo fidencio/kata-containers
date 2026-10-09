@@ -11,12 +11,12 @@ import (
 	"strconv"
 	"time"
 
-	cri "github.com/containerd/containerd/pkg/cri/annotations"
 	"github.com/containerd/ttrpc"
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/device/config"
 	persistapi "github.com/kata-containers/kata-containers/src/runtime/pkg/hypervisors"
 	pb "github.com/kata-containers/kata-containers/src/runtime/protocols/hypervisor"
 	hypannotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations"
+	cri "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations/containerd"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
 	"github.com/pkg/errors"
 )

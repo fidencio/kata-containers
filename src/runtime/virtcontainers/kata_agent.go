@@ -40,8 +40,8 @@ import (
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/utils"
 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/utils/retry"
 
-	ctrAnnotations "github.com/containerd/containerd/pkg/cri/annotations"
 	crioAnnotations "github.com/cri-o/cri-o/pkg/annotations"
+	ctrAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations/containerd"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/selinux/go-selinux"
 	"github.com/sirupsen/logrus"

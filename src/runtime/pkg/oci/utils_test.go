@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	ctrAnnotations "github.com/containerd/containerd/pkg/cri/annotations"
 	crioAnnotations "github.com/cri-o/cri-o/pkg/annotations"
+	ctrAnnotations "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/annotations/containerd"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sys/unix"

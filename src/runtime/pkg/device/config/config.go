@@ -13,12 +13,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/container-orchestrated-devices/container-device-interface/pkg/cdi"
 	"github.com/go-ini/ini"
 	"github.com/kata-containers/kata-containers/src/runtime/pkg/device"
 	vcTypes "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
+	"tags.cncf.io/container-device-interface/pkg/cdi"
 )
 
 // DeviceType indicates device type
@@ -735,13 +735,15 @@ func InjectCDIDevices(spec *specs.Spec, devices []string) error {
 }
 
 func injectDevices(cdiSpecDirs []string, spec *specs.Spec, devices []string) error {
-	var registry cdi.Registry
+	options := []cdi.Option{cdi.WithAutoRefresh(false)}
 	if len(cdiSpecDirs) > 0 {
 		// We can override the directories where to search for CDI specs
 		// if needed, the default is /etc/cdi /var/run/cdi
-		registry = cdi.GetRegistry(cdi.WithSpecDirs(cdiSpecDirs...))
-	} else {
-		registry = cdi.GetRegistry()
+		options = append(options, cdi.WithSpecDirs(cdiSpecDirs...))
+	}
+	registry, err := cdi.NewCache(options...)
+	if err != nil {
+		return fmt.Errorf("CDI registry creation failed: %w", err)
 	}
 
 	if err := registry.Refresh(); err != nil {
