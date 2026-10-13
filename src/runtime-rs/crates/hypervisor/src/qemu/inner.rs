@@ -124,10 +124,7 @@ impl QemuInner {
         self.netns = netns;
 
         if !self.hypervisor_config().disable_selinux {
-            if let Some(label) = selinux_label.as_ref() {
-                self.config.security_info.selinux_label = Some(label.to_string());
-                selinux::set_exec_label(label).context("failed to set SELinux process label")?;
-            }
+            self.config.security_info.selinux_label = selinux_label;
         }
 
         let vm_path =
@@ -445,23 +442,17 @@ impl QemuInner {
             None
         };
 
-        // we need move the qemu process into Network Namespace and set SELinux label.
+        if !self.config.disable_selinux {
+            if let Some(label) = self.config.security_info.selinux_label.as_deref() {
+                selinux::set_exec_label_for_command(command.as_std_mut(), label)
+                    .context("configure QEMU SELinux process label")?;
+            }
+        }
+
+        // Move the QEMU child into its network namespace and set credentials.
         unsafe {
-            let selinux_label = self.config.security_info.selinux_label.clone();
             let _pre_exec = command.pre_exec(move || {
                 let _ = enter_netns(&netns);
-                if let Some(label) = selinux_label.as_ref() {
-                    if let Err(e) = selinux::set_exec_label(label) {
-                        error!(sl!(), "Failed to set SELinux label in child process: {}", e);
-                        // Don't return error here to avoid breaking the process startup
-                        // Log the error and continue
-                    } else {
-                        info!(
-                            sl!(),
-                            "Successfully set SELinux label in child process: {}", &label
-                        );
-                    }
-                }
                 if let Some(user) = &user {
                     if let Some(limit) = memlock_limit {
                         set_memlock_rlimit(limit)
@@ -475,7 +466,10 @@ impl QemuInner {
             });
         }
 
-        let mut qemu_process = command.stderr(Stdio::piped()).spawn()?;
+        let mut qemu_process = command
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("spawn QEMU")?;
         self.qemu_pidfd = qemu_process
             .id()
             .and_then(|pid| match open_qemu_pidfd(pid) {
