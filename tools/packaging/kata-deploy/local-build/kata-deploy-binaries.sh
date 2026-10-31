@@ -797,6 +797,8 @@ install_image() {
 
 	info "Create image"
 
+	export FS_TYPE="erofs"
+
 	if [[ -n "${variant}" ]]; then
 		# Both the standard confidential image and the NVIDIA confidential
 		# image bake the CoCo guest components (including the pause bundle)
