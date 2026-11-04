@@ -1,0 +1,79 @@
+# Copyright (c) 2026 Kata Contributors
+# SPDX-License-Identifier: Apache-2.0
+name: Validate ci-flake PR 14240
+on:
+  push:
+    branches: [codex/ci-flake/validate-pr-14240-a19cdb4a]
+permissions:
+  contents: read
+jobs:
+  openvmm-unit:
+    if: github.repository == 'fidencio/kata-containers'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: baseline
+            repository: kata-containers/kata-containers
+            sha: ae7c5e8ab69c78fd1e04054e6fd3250ec5c6db43
+            expected_tests: 4
+          - role: patched
+            repository: singh4jitendra/kata-containers
+            sha: a19cdb4ae8d2710f9bc242b1bc002cfe70f3a99e
+            expected_tests: 5
+    env:
+      EXPECTED_SHA: ${{ matrix.sha }}
+      EXPECTED_TESTS: ${{ matrix.expected_tests }}
+      ROLE: ${{ matrix.role }}
+      RUST_BACKTRACE: "1"
+      RUST_LIB_BACKTRACE: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify revision and ordinary runner
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          uname -a
+          free -h
+          df -h .
+          echo "Focused tests use shell helper processes and Unix sockets; no KVM or real VMM."
+      # Setup derived from build-checks.yaml's runtime-rs Rust/musl/protobuf job.
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential musl-tools protobuf-compiler
+          ./ci/install_yq.sh
+          ./tests/install_rust.sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Build actual focused test executable and verify selection
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo test --locked -p hypervisor --features openvmm --target x86_64-unknown-linux-musl openvmm::vmm_instance::tests --no-run
+          cargo test --locked -p hypervisor --features openvmm --target x86_64-unknown-linux-musl openvmm::vmm_instance::tests -- --list | tee selected-tests.log
+          count=$(grep -c '^openvmm::vmm_instance::tests::.*: test$' selected-tests.log)
+          test "$count" -eq "$EXPECTED_TESTS"
+      - name: Repeat actual unit tests twenty times
+        run: |
+          set -uo pipefail
+          failed=0
+          for i in $(seq 1 20); do
+            echo "=== $ROLE iteration $i/20, $EXPECTED_SHA ==="
+            if timeout 120 cargo test --locked -p hypervisor --features openvmm --target x86_64-unknown-linux-musl openvmm::vmm_instance::tests -- --test-threads=1; then
+              :
+            else
+              failed=$((failed + 1))
+            fi
+          done
+          echo "$ROLE: $failed failing iterations of 20" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$ROLE" = patched ] && [ "$failed" -ne 0 ]; then exit 1; fi
+      - name: Clippy of affected crate and tests
+        if: matrix.role == 'patched'
+        run: cargo clippy --locked -p hypervisor --all-targets --features openvmm --target x86_64-unknown-linux-musl -- -D warnings
