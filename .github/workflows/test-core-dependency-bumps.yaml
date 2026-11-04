@@ -15,16 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {asset: kernel, static: "no"}
-          - {asset: kernel-debug, static: "no"}
-          - {asset: kernel-dragonball-experimental, static: "no"}
-          - {asset: kernel-nvidia-gpu, static: "no"}
-          - {asset: kernel-nvidia-gpu-dragonball-experimental, static: "no"}
           - {asset: qemu, static: "no"}
           - {asset: qemu-no-shared-fs, static: "no"}
-          - {asset: nydus, static: "no"}
-          - {asset: nydus-snapshotter-for-coco-guest-pull, static: "no"}
-          - {asset: nydus-snapshotter-for-coco-guest-pull, static: "yes"}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
