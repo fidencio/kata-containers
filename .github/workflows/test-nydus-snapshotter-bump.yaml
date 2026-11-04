@@ -1,0 +1,43 @@
+# Copyright (c) 2026 Kata Contributors
+# SPDX-License-Identifier: Apache-2.0
+name: Test nydus-snapshotter bump
+on:
+  push:
+    branches:
+      - codex/test-nydus-snapshotter-v0.16.1
+permissions:
+  contents: read
+jobs:
+  package:
+    if: github.repository == 'fidencio/kata-containers'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        static-runtime: ["no", "yes"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Check Docker and Buildx
+        run: |
+          docker info
+          docker buildx version
+      - name: Build snapshotter tarball
+        env:
+          STATIC_RUNTIME: ${{ matrix.static-runtime }}
+        run: make nydus-snapshotter-for-coco-guest-pull-tarball
+      - name: Verify packaged binaries
+        run: |
+          set -euo pipefail
+          archive=tools/packaging/kata-deploy/local-build/build/kata-deploy-static-nydus-snapshotter-for-coco-guest-pull.tar.zst
+          tar --zstd -tf "$archive"
+          mkdir -p /tmp/nydus-check
+          tar --zstd -xf "$archive" -C /tmp/nydus-check
+          bin=/tmp/nydus-check/opt/kata-artifacts/nydus-snapshotter
+          test -x "$bin/containerd-nydus-grpc"
+          test -x "$bin/nydus-overlayfs"
+          "$bin/containerd-nydus-grpc" --version | tee /tmp/nydus-version
+          grep -F '0.16.1' /tmp/nydus-version
+          "$bin/nydus-overlayfs" --help
