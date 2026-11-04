@@ -1,0 +1,78 @@
+# Copyright (c) 2026 Kata Contributors
+# SPDX-License-Identifier: Apache-2.0
+name: Validate individual component bumps
+on:
+  push:
+    branches: [codex/validate-component-bumps-20261104]
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.repository == 'fidencio/kata-containers'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: kernel
+            sha: 31997a666bad42dc219dca82f47f4766f449b798
+          - asset: kernel-debug
+            sha: 31997a666bad42dc219dca82f47f4766f449b798
+          - asset: kernel-dragonball-experimental
+            sha: 31997a666bad42dc219dca82f47f4766f449b798
+          - asset: kernel-nvidia-gpu
+            sha: 31997a666bad42dc219dca82f47f4766f449b798
+          - asset: qemu
+            sha: cd5af6cec5385b88e27821c7f62b939604d5934b
+          - asset: qemu-no-shared-fs
+            sha: cd5af6cec5385b88e27821c7f62b939604d5934b
+          - asset: nydus
+            sha: 4e3157f1df7c856c416585262a63f6cd3c8dd8bd
+          - asset: nydus-snapshotter-for-coco-guest-pull
+            sha: b5ffb2d7a530ab334112dfa1e5dc4ab8c564c62c
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check single component commit
+        env:
+          EXPECTED_SHA: ${{ matrix.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-list --count ae7c5e8ab69c78fd1e04054e6fd3250ec5c6db43..HEAD)" = 1
+          git show --stat HEAD
+          git diff --check HEAD^ HEAD
+      - name: Build affected Actions asset
+        env:
+          KATA_ASSET: ${{ matrix.asset }}
+          USE_CACHE: "no"
+          PUSH_TO_REGISTRY: "no"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          make "${KATA_ASSET}-tarball" 2>&1 | tee build-output.log
+      - name: Check tarball exists
+        env:
+          KATA_ASSET: ${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          directory=tools/packaging/kata-deploy/local-build/build
+          if [ "$KATA_ASSET" = nydus-snapshotter-for-coco-guest-pull ]; then
+            archive="$directory/kata-deploy-static-$KATA_ASSET.tar.zst"
+          else
+            archive="$directory/kata-static-$KATA_ASSET.tar.zst"
+          fi
+          test -s "$archive"
+          sha256sum "$archive"
+          tar --zstd -tf "$archive"
+      - name: Save build log
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: log-${{ matrix.asset }}
+          path: build-output.log
+          retention-days: 7
