@@ -1,0 +1,60 @@
+# Copyright (c) 2026 Kata Contributors
+# SPDX-License-Identifier: Apache-2.0
+name: Test core dependency bumps
+on:
+  push:
+    branches: [codex/test-core-dependency-bumps-20261104]
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.repository == 'fidencio/kata-containers'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {asset: kernel, static: "no"}
+          - {asset: kernel-debug, static: "no"}
+          - {asset: kernel-dragonball-experimental, static: "no"}
+          - {asset: kernel-nvidia-gpu, static: "no"}
+          - {asset: kernel-nvidia-gpu-dragonball-experimental, static: "no"}
+          - {asset: qemu, static: "no"}
+          - {asset: qemu-no-shared-fs, static: "no"}
+          - {asset: nydus, static: "no"}
+          - {asset: nydus-snapshotter-for-coco-guest-pull, static: "no"}
+          - {asset: nydus-snapshotter-for-coco-guest-pull, static: "yes"}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Show source and build tools
+        run: |
+          git rev-parse HEAD
+          git diff HEAD^ -- versions.yaml
+          docker info
+          docker buildx version
+          df -h .
+      - name: Build tarball
+        env:
+          ASSET: ${{ matrix.asset }}
+          STATIC_RUNTIME: ${{ matrix.static }}
+          USE_CACHE: "no"
+          PUSH_TO_REGISTRY: "no"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          make "${ASSET}-tarball" 2>&1 | tee build-output.log
+      - name: Inspect resulting tarballs
+        run: |
+          set -euo pipefail
+          find tools/packaging/kata-deploy/local-build/build -maxdepth 1 -type f -name '*.tar.zst' -print -exec sha256sum {} \; -exec tar --zstd -tf {} \;
+      - name: Save build log
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: log-${{ matrix.asset }}-static-${{ matrix.static }}
+          path: build-output.log
+          retention-days: 7

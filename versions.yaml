@@ -90,7 +90,7 @@ assets:
     qemu:
       description: "VMM that uses KVM"
       url: "https://github.com/qemu/qemu"
-      version: "v11.0.1"
+      version: "v11.1.3"
 
     qemu-snp-experimental:
       description: "QEMU with GPU+SNP support"
@@ -211,15 +211,15 @@ assets:
   kernel:
     description: "Linux kernel optimised for virtual machines"
     url: "https://cdn.kernel.org/pub/linux/kernel/v6.x/"
-    version: "v6.18.56"
+    version: "v6.18.60"
     nvidia:
       url: "https://cdn.kernel.org/pub/linux/kernel/v6.x/"
-      version: "v6.18.56"
+      version: "v6.18.60"
 
   kernel-dragonball-experimental:
     description: "Linux kernel with Dragonball VMM optimizations like upcall"
     url: "https://cdn.kernel.org/pub/linux/kernel/v6.x/"
-    version: "v6.18.56"
+    version: "v6.18.60"
 
 externals:
   description: "Third-party projects used by the system"
@@ -372,13 +372,13 @@ externals:
 
   nydus:
     description: "Nydus image acceleration service"
-    url: "https://github.com/dragonflyoss/image-service"
-    version: "v2.2.3"
+    url: "https://github.com/dragonflyoss/nydus"
+    version: "v2.4.5"
 
   nydus-snapshotter:
     description: "Snapshotter for Nydus image acceleration service"
     url: "https://github.com/containerd/nydus-snapshotter"
-    version: "v0.15.15"
+    version: "v0.16.1"
 
   oras:
     description: "OCI Registry As Storage CLI"
