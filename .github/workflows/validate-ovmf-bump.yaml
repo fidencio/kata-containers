@@ -1,0 +1,50 @@
+# Copyright (c) 2026 Kata Contributors
+# SPDX-License-Identifier: Apache-2.0
+name: Validate OVMF stable bump
+on:
+  push:
+    branches: [codex/validate-ovmf-20261105]
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.repository == 'fidencio/kata-containers'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {asset: ovmf, runner: ubuntu-24.04, arch: amd64}
+          - {asset: ovmf-sev, runner: ubuntu-24.04, arch: amd64}
+          - {asset: ovmf, runner: ubuntu-24.04-arm, arch: arm64}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 842bd38fab63e3941a1ee3811b12eacf002e49eb
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate commit and YAML
+        run: |
+          git diff --check HEAD^ HEAD
+          test "$(git rev-list --count 1bcc140ecf09d613dedf2cfd378c91bbb4169abf..HEAD)" = 1
+          sudo apt-get update
+          sudo apt-get install -y yamllint
+          yamllint versions.yaml
+      - name: Build
+        env:
+          KATA_ASSET: ${{ matrix.asset }}
+          USE_CACHE: "no"
+          PUSH_TO_REGISTRY: "no"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          make "${KATA_ASSET}-tarball" 2>&1 | tee build-output.log
+          tar --zstd -tf "tools/packaging/kata-deploy/local-build/build/kata-static-${KATA_ASSET}.tar.zst"
+      - name: Preserve build log
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: log-${{ matrix.asset }}-${{ matrix.arch }}
+          path: build-output.log
+          retention-days: 7
