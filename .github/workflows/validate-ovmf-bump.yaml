@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 842bd38fab63e3941a1ee3811b12eacf002e49eb
+          ref: f85830569d4f124d7e6362cd6ae72d1b8f3c4fe4
           fetch-depth: 0
           persist-credentials: false
       - name: Validate commit and YAML
