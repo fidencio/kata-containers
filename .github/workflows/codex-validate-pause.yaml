@@ -1,0 +1,93 @@
+# Copyright (c) 2026 NVIDIA Corporation
+# SPDX-License-Identifier: Apache-2.0
+name: Validate pause image dependency bump
+on:
+  push:
+    branches: [codex/validate-pause-3.10.2-20261106]
+permissions:
+  contents: read
+jobs:
+  packaging:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: fidencio/kata-containers
+          ref: 07ef43ce17b7924950befaae7ec50ce25037c1ee
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact version and published image
+        run: |
+          test "$(git rev-parse HEAD)" = "07ef43ce17b7924950befaae7ec50ce25037c1ee"
+          ./ci/install_yq.sh
+          export PATH="${HOME}/go/bin:${PATH}"
+          test "$(yq '.externals.pause.version' versions.yaml)" = "3.10.2"
+          docker buildx imagetools inspect registry.k8s.io/pause:3.10.2
+      - name: Build fresh tarball using upstream Actions target
+        run: make pause-image-tarball
+        env:
+          TAR_OUTPUT: pause-image.tar.gz
+          PUSH_TO_REGISTRY: "no"
+          USE_CACHE: "no"
+          ARTEFACT_REGISTRY: ghcr.io
+          TARGET_BRANCH: main
+          RELEASE: "no"
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
+      - name: Record tarball and executable evidence
+        run: |
+          build_dir=$(readlink -f build)
+          test -s "${build_dir}/kata-static-pause-image.tar.zst"
+          tar --zstd -tvf "${build_dir}/kata-static-pause-image.tar.zst"
+          cat "${build_dir}/pause-image-version"
+          grep '3.10.2' "${build_dir}/pause-image-version"
+          mkdir -p /tmp/pause-validation
+          tar --zstd -xf "${build_dir}/kata-static-pause-image.tar.zst" -C /tmp/pause-validation
+          binary=$(find /tmp/pause-validation -type f -path '*/rootfs/pause' -print -quit)
+          test -n "${binary}"
+          file "${binary}"
+          "${binary}" -v
+          sha256sum "${build_dir}/kata-static-pause-image.tar.zst"
+          mkdir -p kata-build
+          cp "${build_dir}/kata-static-pause-image.tar.zst" "${build_dir}/pause-image-version" "${build_dir}/pause-image-sha256sum" kata-build/
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: pause-validation-${{ matrix.arch }}
+          path: kata-build/
+          if-no-files-found: error
+          retention-days: 15
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: fidencio/kata-containers
+          ref: 07ef43ce17b7924950befaae7ec50ce25037c1ee
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check YAML and prepare Go version from versions.yaml
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yamllint
+          yamllint versions.yaml
+          sudo -E ./ci/install_yq.sh
+          echo "GO_VERSION=$(yq '.languages.golang.version' versions.yaml)" >> "$GITHUB_ENV"
+        env:
+          INSTALL_IN_GOPATH: "false"
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Go module tidy check triggered by versions.yaml
+        run: |
+          find . -name go.mod -execdir go mod tidy \;
+          git diff --exit-code
