@@ -2223,6 +2223,7 @@ impl Persist for VirtSandbox {
             config_path: self.config_path.clone(),
             created_netns: self.created_netns.clone(),
             bootstrap: false,
+            keep_abnormal: Some(self.resource_manager.config().await.runtime.keep_abnormal),
             hypervisor: match hypervisor_state.hypervisor_type.as_str() {
                 #[cfg(all(
                     feature = "dragonball",
