@@ -127,6 +127,34 @@ mod tests {
         ("cgroup_state", "CgroupsResource::restore(), then deleted"),
         ("ephemeral_disks", "cleanup_ephemeral_disks()"),
     ];
+    const ENDPOINT_FIELDS: &[(&str, &str)] = &[
+        (
+            "physical_endpoint",
+            "rebind_saved_physical_endpoints() gives the NIC back",
+        ),
+        (
+            "tap_iface_name",
+            "RestoredNetwork::remove() deletes the TAP",
+        ),
+        (
+            "construction_only",
+            "limits the TAP removal to never-attached endpoints",
+        ),
+    ];
+    const PHYSICAL_ENDPOINT_FIELDS: &[(&str, &str)] = &[
+        ("bdf", "the device the rebind acts on"),
+        ("driver", "the host driver it binds back"),
+        ("vendor_id", "names the device to the driver"),
+        ("device_id", "names the device to the driver"),
+    ];
+    const CGROUP_FIELDS: &[(&str, &str)] = &[
+        ("path", "the sandbox cgroup to destroy"),
+        ("overhead_path", "the overhead cgroup to destroy"),
+        (
+            "sandbox_cgroup_only",
+            "whether an overhead cgroup exists at all",
+        ),
+    ];
     const HYPERVISOR_FIELDS: &[(&str, &str)] = &[
         (
             "hypervisor_type",
@@ -173,6 +201,16 @@ mod tests {
         assert_eq!(keys(&json), names(SANDBOX_FIELDS));
         assert_eq!(keys(&json["resource"]), names(RESOURCE_FIELDS));
         assert_eq!(keys(&json["hypervisor"]), names(HYPERVISOR_FIELDS));
+        let endpoint = &json["resource"]["endpoint"][0];
+        assert_eq!(keys(endpoint), names(ENDPOINT_FIELDS));
+        assert_eq!(
+            keys(&endpoint["physical_endpoint"]),
+            names(PHYSICAL_ENDPOINT_FIELDS)
+        );
+        assert_eq!(
+            keys(&json["resource"]["cgroup_state"]),
+            names(CGROUP_FIELDS)
+        );
 
         let reloaded: SandboxState = serde_json::from_value(json).unwrap();
         assert_eq!(reloaded.config_path, state.config_path);

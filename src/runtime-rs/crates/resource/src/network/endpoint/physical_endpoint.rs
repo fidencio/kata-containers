@@ -209,7 +209,6 @@ impl Endpoint for PhysicalEndpoint {
                 driver: self.driver.clone(),
                 vendor_id: self.vendor_device_id.vendor_id.clone(),
                 device_id: self.vendor_device_id.device_id.clone(),
-                hard_addr: self.hard_addr.clone(),
             }),
             ..Default::default()
         })
@@ -406,7 +405,6 @@ pub(crate) fn rebind_saved_physical_endpoints(
 #[cfg(test)]
 mod rebind_tests {
     use super::*;
-    use crate::network::endpoint::endpoint_persist::VethEndpointState;
     use std::sync::Mutex;
 
     fn physical(bdf: &str) -> EndpointState {
@@ -416,7 +414,6 @@ mod rebind_tests {
                 driver: "mlx5_core".to_string(),
                 vendor_id: "0x15b3".to_string(),
                 device_id: "0x101e".to_string(),
-                hard_addr: String::new(),
             }),
             ..Default::default()
         }
@@ -427,7 +424,7 @@ mod rebind_tests {
         let endpoints = vec![
             physical("0000:41:00.2"),
             EndpointState {
-                veth_endpoint: Some(VethEndpointState::default()),
+                tap_iface_name: Some("tap0_kata".to_string()),
                 ..Default::default()
             },
             physical("0000:41:00.3"),

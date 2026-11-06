@@ -128,7 +128,6 @@ mod tests {
                 driver: "mlx5_core".to_string(),
                 vendor_id: "0x15b3".to_string(),
                 device_id: "0x101e".to_string(),
-                hard_addr: String::new(),
             }),
             ..Default::default()
         }];
