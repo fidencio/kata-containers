@@ -1,0 +1,62 @@
+# Copyright (c) 2026 NVIDIA Corporation
+# SPDX-License-Identifier: Apache-2.0
+name: Validate remaining existing Actions architectures
+on:
+  push:
+    branches: [codex/validate-dependency-other-arches-20261106]
+permissions:
+  contents: read
+jobs:
+  existing-architecture:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04-ppc64le
+            asset: agent
+            sha: 988d739c7566ab6c7efcdafacd5ad1370bc8a48d
+            timeout: 55
+          - runner: ubuntu-26.04-s390x
+            asset: agent
+            sha: 988d739c7566ab6c7efcdafacd5ad1370bc8a48d
+            timeout: 40
+          - runner: ubuntu-26.04-s390x
+            asset: pause-image
+            sha: 07ef43ce17b7924950befaae7ec50ce25037c1ee
+            timeout: 40
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: fidencio/kata-containers
+          ref: ${{ matrix.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build exact component SHA using existing Actions target
+        env:
+          KATA_ASSET: ${{ matrix.asset }}
+          COMPONENT_SHA: ${{ matrix.sha }}
+          TAR_OUTPUT: ${{ matrix.asset }}.tar.gz
+          PUSH_TO_REGISTRY: "no"
+          USE_CACHE: "no"
+          ARTEFACT_REGISTRY: ghcr.io
+          TARGET_BRANCH: main
+          RELEASE: "no"
+          GH_TOKEN: ${{ github.token }}
+          USE_DEVMAPPER: ${{ matrix.asset == 'agent' && 'yes' || 'no' }}
+          VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
+        run: |
+          test "$(git rev-parse HEAD)" = "${COMPONENT_SHA}"
+          make "${KATA_ASSET}-tarball"
+          build_dir=$(readlink -f build)
+          cat "${build_dir}/${KATA_ASSET}-version"
+          sha256sum "${build_dir}/kata-static-${KATA_ASSET}.tar.zst"
+          mkdir -p kata-build
+          cp "${build_dir}/kata-static-${KATA_ASSET}.tar.zst" "${build_dir}/${KATA_ASSET}-version" "${build_dir}/${KATA_ASSET}-sha256sum" kata-build/
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: remaining-${{ matrix.runner }}-${{ matrix.asset }}
+          path: kata-build/
+          if-no-files-found: error
+          retention-days: 15
