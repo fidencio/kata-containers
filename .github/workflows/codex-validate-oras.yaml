@@ -1,0 +1,137 @@
+# Copyright (c) 2026 NVIDIA Corporation
+# SPDX-License-Identifier: Apache-2.0
+name: Validate ORAS dependency bump
+on:
+  push:
+    branches: [codex/validate-oras-1.3.6-20261106]
+permissions:
+  contents: read
+jobs:
+  packaging:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            digest: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            digest: b84269e78dfc2d5329a4aab373da3200de95e6c138338cf6c66c10c0a3f248c1
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: fidencio/kata-containers
+          ref: 609d7807dac3352f0d1e042e31f48de3bc1a752f
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact component commit
+        run: test "$(git rev-parse HEAD)" = "609d7807dac3352f0d1e042e31f48de3bc1a752f"
+      - name: Install yq as in upstream Actions
+        run: sudo -E ./ci/install_yq.sh
+        env:
+          INSTALL_IN_GOPATH: "false"
+      - name: Verify release archive and native installer
+        env:
+          ORAS_ARCH: ${{ matrix.arch }}
+          EXPECTED_DIGEST: ${{ matrix.digest }}
+        run: |
+          mkdir -p /tmp/oras-verified
+          archive="oras_1.3.6_linux_${ORAS_ARCH}.tar.gz"
+          curl -fL -o "/tmp/${archive}" "https://github.com/oras-project/oras/releases/download/v1.3.6/${archive}"
+          echo "${EXPECTED_DIGEST}  /tmp/${archive}" | sha256sum --check
+          tar -C /tmp/oras-verified -xzf "/tmp/${archive}"
+          sudo tools/packaging/kata-deploy/local-build/dockerbuild/install_oras.sh
+          cmp "$(command -v oras)" /tmp/oras-verified/oras
+          oras version | tee /tmp/oras-version.txt
+          oras version | grep -Eq '^Version:[[:space:]]+1\.3\.6$'
+          sudo tools/packaging/kata-deploy/local-build/dockerbuild/install_oras.sh
+      - name: Exercise packaging OCI CLI against disposable local registry
+        run: |
+          docker run -d --name oras-validation-registry -p 127.0.0.1:5000:5000 registry:2
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:5000/v2/; then break; fi
+            sleep 1
+          done
+          mkdir -p /tmp/oras-push /tmp/oras-pull
+          printf 'ORAS packaging compatibility test\n' > /tmp/oras-push/test-file
+          cd /tmp/oras-push
+          oras push --plain-http localhost:5000/kata-oras:validation test-file --format 'go-template={{.reference}}' --no-tty
+          oras manifest fetch --plain-http localhost:5000/kata-oras:validation | jq -e '.schemaVersion == 2'
+          cd /tmp/oras-pull
+          oras pull --plain-http localhost:5000/kata-oras:validation --no-tty
+          cmp test-file /tmp/oras-push/test-file
+      # Mapping: ORAS has no tarball target. Busybox is an existing native
+      # asset in both upstream build-kata-static-tarball workflow matrices.
+      - name: Build fresh busybox tarball using upstream packaging target
+        run: make busybox-tarball
+        env:
+          TAR_OUTPUT: busybox.tar.gz
+          PUSH_TO_REGISTRY: "no"
+          USE_CACHE: "no"
+          ARTEFACT_REGISTRY: ghcr.io
+          TARGET_BRANCH: main
+          RELEASE: "no"
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
+      - name: Check builder consumes selected ORAS and record artifact evidence
+        run: |
+          docker run --rm --entrypoint oras build-kata-deploy version | tee /tmp/oras-builder-version.txt
+          grep -Eq '^Version:[[:space:]]+1\.3\.6$' /tmp/oras-builder-version.txt
+          docker run --rm --entrypoint sha256sum build-kata-deploy /usr/local/bin/oras
+          sha256sum /tmp/oras-verified/oras
+          build_dir=$(readlink -f build)
+          test -s "${build_dir}/kata-static-busybox.tar.zst"
+          tar --zstd -tvf "${build_dir}/kata-static-busybox.tar.zst"
+          cat "${build_dir}/busybox-version"
+          sha256sum "${build_dir}/kata-static-busybox.tar.zst"
+          mkdir -p kata-build
+          cp "${build_dir}/kata-static-busybox.tar.zst" "${build_dir}/busybox-version" "${build_dir}/busybox-sha256sum" kata-build/
+          cp /tmp/oras-version.txt /tmp/oras-builder-version.txt kata-build/
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: oras-validation-${{ matrix.arch }}
+          path: kata-build/
+          if-no-files-found: error
+          retention-days: 15
+      - name: Remove disposable registry
+        if: always()
+        run: docker rm -f oras-validation-registry || true
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: fidencio/kata-containers
+          ref: 609d7807dac3352f0d1e042e31f48de3bc1a752f
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set upstream comparison base and install dependencies
+        run: |
+          git fetch https://github.com/kata-containers/kata-containers.git 2d5ce40f7ff82083015b109fd253678960b44ebb
+          git update-ref refs/remotes/origin/main 2d5ce40f7ff82083015b109fd253678960b44ebb
+          sudo apt-get update
+          sudo apt-get install -y moreutils yamllint shellcheck
+          sudo -E ./ci/install_yq.sh
+        env:
+          INSTALL_IN_GOPATH: "false"
+      - name: Check changed YAML, scripts and Dockerfile
+        run: |
+          bash -n tools/packaging/kata-deploy/local-build/dockerbuild/install_oras.sh
+          bash -n tools/packaging/kata-deploy/local-build/kata-deploy-copy-yq-installer.sh
+          shellcheck --severity=style tools/packaging/kata-deploy/local-build/dockerbuild/install_oras.sh tools/packaging/kata-deploy/local-build/kata-deploy-copy-yq-installer.sh
+          test_path=tests bash tests/static-checks.sh --repo-path "$(pwd)" --branch main --versions --scripts --dockerfiles
+        env:
+          GOPATH: /tmp/kata-go
+      - name: Read Go version as in static-checks.yaml
+        run: echo "GO_VERSION=$(yq '.languages.golang.version' versions.yaml)" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Go module tidy check triggered by versions.yaml
+        run: |
+          find . -name go.mod -execdir go mod tidy \;
+          git diff --exit-code
