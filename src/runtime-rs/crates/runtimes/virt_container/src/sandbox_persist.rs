@@ -122,25 +122,15 @@ mod tests {
         ("endpoint", "RestoredNetwork::remove() rebinds the VFs"),
         (
             "netns_path",
-            "RestoredNetwork::remove() reaches unattached TAPs through it",
+            "RestoredNetwork::remove() sweeps the Kata-named links in it",
         ),
         ("cgroup_state", "CgroupsResource::restore(), then deleted"),
         ("ephemeral_disks", "cleanup_ephemeral_disks()"),
     ];
-    const ENDPOINT_FIELDS: &[(&str, &str)] = &[
-        (
-            "physical_endpoint",
-            "rebind_saved_physical_endpoints() gives the NIC back",
-        ),
-        (
-            "tap_iface_name",
-            "RestoredNetwork::remove() deletes the TAP",
-        ),
-        (
-            "construction_only",
-            "limits the TAP removal to never-attached endpoints",
-        ),
-    ];
+    const ENDPOINT_FIELDS: &[(&str, &str)] = &[(
+        "physical_endpoint",
+        "rebind_saved_physical_endpoints() gives the NIC back",
+    )];
     const PHYSICAL_ENDPOINT_FIELDS: &[(&str, &str)] = &[
         ("bdf", "the device the rebind acts on"),
         ("driver", "the host driver it binds back"),

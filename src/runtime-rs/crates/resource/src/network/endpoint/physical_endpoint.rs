@@ -210,7 +210,6 @@ impl Endpoint for PhysicalEndpoint {
                 vendor_id: self.vendor_device_id.vendor_id.clone(),
                 device_id: self.vendor_device_id.device_id.clone(),
             }),
-            ..Default::default()
         })
     }
 
@@ -377,10 +376,8 @@ pub(crate) fn rebind_saved_physical_endpoints(
     let mut failures = 0;
     for p in endpoints
         .iter()
-        // Even an endpoint the state flags as never attached is tried: the
-        // record is written before the attach, so a shim that died between
-        // attaching and the next save leaves the flag stale. Binding back a
-        // device that never left its host driver is a no-op.
+        // Every recorded device is tried, however far its attach got:
+        // binding back one that never left its host driver is a no-op.
         .filter_map(|e| e.physical_endpoint.as_ref())
     {
         let bound = VendorDevice::new(&p.vendor_id, &p.device_id)
@@ -415,7 +412,6 @@ mod rebind_tests {
                 vendor_id: "0x15b3".to_string(),
                 device_id: "0x101e".to_string(),
             }),
-            ..Default::default()
         }
     }
 
@@ -423,18 +419,9 @@ mod rebind_tests {
     fn only_physical_endpoints_are_bound_back_and_all_are_tried() {
         let endpoints = vec![
             physical("0000:41:00.2"),
-            EndpointState {
-                tap_iface_name: Some("tap0_kata".to_string()),
-                ..Default::default()
-            },
+            EndpointState::default(),
             physical("0000:41:00.3"),
-            // The flag is written before the attach, so it can be stale:
-            // this endpoint may have been attached by a shim that died
-            // before the following save, and is bound back too.
-            EndpointState {
-                construction_only: true,
-                ..physical("0000:41:00.4")
-            },
+            physical("0000:41:00.4"),
         ];
         let bound = Mutex::new(Vec::new());
         let result = rebind_saved_physical_endpoints(&endpoints, |bdf, driver, id| {

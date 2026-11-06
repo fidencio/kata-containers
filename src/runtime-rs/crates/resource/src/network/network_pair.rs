@@ -187,6 +187,23 @@ impl NetworkPair {
     }
 }
 
+/// The names of the links Kata made in the current network namespace. Every
+/// link Kata creates there carries [`TAP_SUFFIX`], a name fixed before the
+/// link exists, in a namespace that belongs to one sandbox alone: the names
+/// are the record.
+pub(crate) async fn kata_link_names(handle: &rtnetlink::Handle) -> Result<Vec<String>> {
+    let mut links = handle.link().get().execute();
+    let mut names = vec![];
+    while let Some(msg) = links.try_next().await.context("list links")? {
+        let link = link::get_link_from_message(msg);
+        let name = link.attrs().name.clone();
+        if name.ends_with(TAP_SUFFIX) {
+            names.push(name);
+        }
+    }
+    Ok(names)
+}
+
 /// Delete a link by name, treating an absent link as already deleted.
 pub(crate) async fn delete_link_by_name(handle: &rtnetlink::Handle, name: &str) -> Result<()> {
     let mut links = handle.link().get().match_name(name.to_string()).execute();
