@@ -72,7 +72,7 @@ workdir="${WORKDIR:-${PWD}}"
 
 destdir="${workdir}/kata-static"
 
-default_binary_permissions='0744'
+default_binary_permissions='0755'
 
 # Rootfs image variants that carry a dm-verity root hash (measured rootfs).
 # Their hashes are collected at build time and consumed by the Rust runtime,
