@@ -24,11 +24,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: fidencio/kata-containers
-          ref: 609d7807dac3352f0d1e042e31f48de3bc1a752f
+          ref: b3a790f69f17533c81e2ca13cefb76b2b1de47f0
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact component commit
-        run: test "$(git rev-parse HEAD)" = "609d7807dac3352f0d1e042e31f48de3bc1a752f"
+        run: test "$(git rev-parse HEAD)" = "b3a790f69f17533c81e2ca13cefb76b2b1de47f0"
       - name: Install yq as in upstream Actions
         run: sudo -E ./ci/install_yq.sh
         env:
@@ -43,11 +43,11 @@ jobs:
           curl -fL -o "/tmp/${archive}" "https://github.com/oras-project/oras/releases/download/v1.3.6/${archive}"
           echo "${EXPECTED_DIGEST}  /tmp/${archive}" | sha256sum --check
           tar -C /tmp/oras-verified -xzf "/tmp/${archive}"
-          sudo tools/packaging/kata-deploy/local-build/dockerbuild/install_oras.sh
+          tools/packaging/kata-deploy/local-build/dockerbuild/install_oras.sh
           cmp "$(command -v oras)" /tmp/oras-verified/oras
           oras version | tee /tmp/oras-version.txt
           oras version | grep -Eq '^Version:[[:space:]]+1\.3\.6$'
-          sudo tools/packaging/kata-deploy/local-build/dockerbuild/install_oras.sh
+          tools/packaging/kata-deploy/local-build/dockerbuild/install_oras.sh
       - name: Exercise packaging OCI CLI against disposable local registry
         run: |
           docker run -d --name oras-validation-registry -p 127.0.0.1:5000:5000 registry:2
@@ -106,7 +106,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: fidencio/kata-containers
-          ref: 609d7807dac3352f0d1e042e31f48de3bc1a752f
+          ref: b3a790f69f17533c81e2ca13cefb76b2b1de47f0
           fetch-depth: 0
           persist-credentials: false
       - name: Set upstream comparison base and install dependencies
@@ -135,3 +135,14 @@ jobs:
         run: |
           find . -name go.mod -execdir go mod tidy \;
           git diff --exit-code
+      - name: Validate workflows with upstream actionlint configuration
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7
+        with:
+          version: '1.7.12'
+      - name: Validate workflows with upstream zizmor configuration
+        uses: zizmorcore/zizmor-action@135698455da5c3b3e55f73f4419e481ab68cdd95
+        with:
+          advanced-security: false
+          annotations: true
+          persona: auditor
+          version: v1.22.0
