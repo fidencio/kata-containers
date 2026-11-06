@@ -26,6 +26,14 @@ jobs:
         run: |
           set -euo pipefail
           docker buildx imagetools inspect registry.k8s.io/pause:3.10.2 --raw | tee evidence/pause-3.10.2-manifest.json | jq -c '[.manifests[] | {digest,platform}]'
+      - name: Verify distribution package availability for candidate GPU stack
+        run: |
+          set -euo pipefail
+          for arch in x86_64 sbsa; do
+            echo "PACKAGE_INDEX ${arch}"
+            curl --fail --retry 2 --silent --show-error "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/${arch}/Packages.gz" | gzip -dc > "evidence/packages-${arch}"
+            awk 'BEGIN {RS=""; FS="\\n"} /Package: (nvidia-driver-pinning|nvidia-driver-620|cuda-drivers|nvidia-container-toolkit|datacenter-gpu-manager|dcgm-exporter|nvattest|libnvat)/ {for (i=1;i<=NF;i++) if ($i ~ /^(Package|Version|Filename):/) print $i; print ""}' "evidence/packages-${arch}"
+          done
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: always()
         with:
