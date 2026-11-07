@@ -1,0 +1,119 @@
+name: Validate Linux 6.18.62
+on:
+  push:
+    branches: [codex/validate-kernel-6.18.62-final-20261107]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            asset: kernel
+            timeout: 40
+          - arch: amd64
+            runner: ubuntu-24.04
+            asset: kernel-debug
+            timeout: 40
+          - arch: amd64
+            runner: ubuntu-24.04
+            asset: kernel-dragonball-experimental
+            timeout: 40
+          - arch: amd64
+            runner: ubuntu-24.04
+            asset: kernel-nvidia-gpu
+            timeout: 40
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            asset: kernel
+            timeout: 35
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            asset: kernel-debug
+            timeout: 35
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            asset: kernel-dragonball-experimental
+            timeout: 35
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            asset: kernel-nvidia-gpu
+            timeout: 35
+          - arch: ppc64le
+            runner: ubuntu-24.04-ppc64le
+            asset: kernel
+            timeout: 55
+          - arch: s390x
+            runner: ubuntu-26.04-s390x
+            asset: kernel
+            timeout: 40
+          - arch: riscv64
+            runner: riscv-builder
+            asset: kernel
+            timeout: 120
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: e47a45e58bd11c9640967a0b4d171763f7823a57
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build kernel variant from the exact update commit
+        env:
+          KATA_ASSET: ${{ matrix.asset }}
+          TAR_OUTPUT: ${{ matrix.asset }}.tar.gz
+          TARGET_BRANCH: main
+          USE_CACHE: "no"
+          PUSH_TO_REGISTRY: "no"
+          ARTEFACT_REGISTRY: ghcr.io
+          RELEASE: "no"
+          KBUILD_SIGN_PIN: ""
+          USE_DEVMAPPER: "no"
+          VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "e47a45e58bd11c9640967a0b4d171763f7823a57"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          make "${KATA_ASSET}-tarball"
+          build_dir=$(readlink -f build)
+          cat "${build_dir}/${KATA_ASSET}-version"
+          grep -F '6.18.62' "${build_dir}/${KATA_ASSET}-version"
+          sha256sum "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.*
+          mkdir -p kata-build
+          cp "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.* "${build_dir}/${KATA_ASSET}-version" kata-build/
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: kernel-6.18.62-${{ matrix.arch }}-${{ matrix.asset }}
+          path: kata-build/
+          if-no-files-found: error
+          retention-days: 7
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: e47a45e58bd11c9640967a0b4d171763f7823a57
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify pins and whitespace
+        run: |
+          git diff --check HEAD^ HEAD
+          sudo apt-get update
+          sudo apt-get install -y yamllint
+          yamllint versions.yaml
+          test "$(grep -c 'version: "v6.18.62"' versions.yaml)" = 3
+          test "$(cat tools/packaging/kernel/kata_config_version)" = 211
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5
+        with:
+          go-version: '1.26.10'
+      - name: Go module tidy
+        run: |
+          find . -name go.mod -print0 | while IFS= read -r -d '' module; do
+            (cd "$(dirname "$module")" && go mod tidy)
+          done
+          git diff --exit-code
