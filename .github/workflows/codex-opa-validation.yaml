@@ -62,7 +62,7 @@ jobs:
           ./tests/install_regorus.sh
       - name: Run Kata's static checker with the selected OPA and Regorus
         run: |
-          git remote set-url origin https://github.com/kata-containers/kata-containers.git
+          git remote set-url origin https://github.com/kata-containers/kata-containers
           git update-ref refs/remotes/origin/main "8fd86af5a8099749e0b4a01339abee7056ea1970"
           export PATH="$PATH:$GOPATH/bin"
           make static-checks
