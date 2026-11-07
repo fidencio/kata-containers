@@ -1,0 +1,79 @@
+name: Validate shell scripts and ppc64le libseccomp build
+on:
+  push:
+    branches: [codex/validate-dependency-checks-20261107]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: ppc64le
+            runner: ubuntu-24.04-ppc64le
+            asset: agent
+            timeout: 55
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 6d20574f8b18a038e72a8160f98205034c52badf
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build libseccomp consumer from the exact update commit
+        env:
+          KATA_ASSET: ${{ matrix.asset }}
+          TAR_OUTPUT: ${{ matrix.asset }}.tar.gz
+          TARGET_BRANCH: main
+          USE_CACHE: "no"
+          PUSH_TO_REGISTRY: "no"
+          ARTEFACT_REGISTRY: ghcr.io
+          RELEASE: "no"
+          KBUILD_SIGN_PIN: ""
+          USE_DEVMAPPER: "no"
+          VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "6d20574f8b18a038e72a8160f98205034c52badf"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          set -o pipefail
+          make "${KATA_ASSET}-tarball" 2>&1 | tee /tmp/build-libseccomp.log
+          grep -F "Build and install libseccomp version 2.6.1" /tmp/build-libseccomp.log
+          build_dir=$(readlink -f build)
+          cat "${build_dir}/${KATA_ASSET}-version"
+          sha256sum "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.*
+          mkdir -p kata-build
+          cp "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.* "${build_dir}/${KATA_ASSET}-version" kata-build/
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: libseccomp-2.6.1-${{ matrix.arch }}-${{ matrix.asset }}
+          path: kata-build/
+          if-no-files-found: error
+          retention-days: 7
+  shellcheck:
+    strategy:
+      fail-fast: false
+      matrix:
+        sha: [62f5de1560393b45605a45b7afcba3410dcbb9f7, 6d20574f8b18a038e72a8160f98205034c52badf]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38
+        with:
+          severity: style
+          ignore_paths: >-
+            **/vendor/**
+            tests/metrics
+            tests/integration/stdio
+          ignore_names: >-
+            gha-stability-run.sh
+            kubernetes_stability.sh
+            kubernetes_soak_test.sh
+            kata-manager.sh
