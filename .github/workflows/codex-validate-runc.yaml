@@ -1,0 +1,89 @@
+name: Validate runc 1.5.2
+on:
+  push:
+    branches: [codex/validate-runc-1.5.2-20261107]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04, suite: functional/kata-monitor, containerd: latest, vmm: qemu }
+          - { arch: amd64, runner: ubuntu-24.04, suite: integration/nydus, containerd: latest, vmm: qemu }
+          - { arch: amd64, runner: ubuntu-24.04, suite: integration/nydus, containerd: minimum, vmm: qemu }
+          - { arch: amd64, runner: ubuntu-24.04, suite: integration/cri-containerd, containerd: latest, vmm: qemu }
+          - { arch: s390x, runner: s390x-large, suite: integration/cri-containerd, containerd: latest, vmm: qemu }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    env:
+      CONTAINER_ENGINE: containerd
+      CONTAINERD_VERSION: ${{ matrix.containerd }}
+      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      GOPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 9849e431f5e424fd139117683b3ebaab4b84ca09
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact commit and stage the older runc release
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(git rev-parse HEAD)" = "9849e431f5e424fd139117683b3ebaab4b84ca09"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          git diff --check HEAD^ HEAD
+          bash -n tests/common.bash
+          case "$ARCH" in
+            amd64)
+              old=b21fda1d5a1510b19c3f6fb43ecb3a92887654a9d0c2b64e84b8b08f24ff0e30
+              new=599f6f94ff8c5057241eff0d54c3c74f95c34935b6457b33fe545defc61e9488
+              ;;
+            s390x)
+              old=4b14072f28cdf2b7f6b71e8bf65748ca0419168054174c9d981a11687e4d0585
+              new=c3ae5bc58d9a034d09fcd7ef49b350cd391ff7c6f966d3f6cc936344b6964ac6
+              ;;
+          esac
+          curl -fsSLo /tmp/old-runc "https://github.com/opencontainers/runc/releases/download/v1.2.9/runc.$ARCH"
+          echo "$old  /tmp/old-runc" | sha256sum -c -
+          sudo install -Dm0755 /tmp/old-runc /usr/local/sbin/runc
+          echo "RUNC_SHA=$new" >> "$GITHUB_ENV"
+      - name: Run the existing dependency installation step
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUITE: ${{ matrix.suite }}
+        run: |
+          bash "tests/$SUITE/gha-run.sh" install-dependencies
+          echo "$RUNC_SHA  /usr/local/sbin/runc" | sha256sum -c -
+          /usr/local/sbin/runc --version
+      - name: Fetch unchanged Kata artifact from the exact upstream base
+        if: matrix.suite != 'integration/cri-containerd'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          github-token: ${{ github.token }}
+          repository: kata-containers/kata-containers
+          run-id: 42316900241
+          name: kata-go-static-tarball-amd64
+          path: kata-artifacts
+      - name: Fetch unchanged tools artifact from the exact upstream base
+        if: matrix.suite == 'integration/nydus'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          github-token: ${{ github.token }}
+          repository: kata-containers/kata-containers
+          run-id: 42316900241
+          name: kata-tools-static-tarball-amd64
+          path: kata-tools-artifacts
+      - name: Run the upstream integration entry point
+        if: matrix.suite != 'integration/cri-containerd'
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          bash "tests/$SUITE/gha-run.sh" install-kata kata-artifacts
+          if [[ "$SUITE" == integration/nydus ]]; then
+            bash "tests/$SUITE/gha-run.sh" install-kata-tools kata-tools-artifacts
+          fi
+          bash "tests/$SUITE/gha-run.sh" run
