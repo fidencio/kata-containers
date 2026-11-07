@@ -41,6 +41,8 @@ const DEFAULT_QMP_CONNECT_DEADLINE_MS: u64 = 50000;
 const DEFAULT_QMP_RETRY_SLEEP_MS: u64 = 50;
 
 const DEVICE_DELETED_TIMEOUT: Duration = Duration::from_secs(10);
+const NETWORK_PCI_PATH_TIMEOUT: Duration = Duration::from_secs(1);
+const NETWORK_PCI_PATH_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 fn collect_block_fdsets(fdsets: Vec<qmp::FdsetInfo>) -> HashMap<String, Vec<i64>> {
     let mut block_fdsets: HashMap<String, Vec<i64>> = HashMap::new();
@@ -1089,6 +1091,26 @@ impl Qmp {
     }
 
     pub fn get_device_by_qdev_id(&mut self, qdev_id: &str) -> Result<PciPath> {
+        self.find_device_by_qdev_id(qdev_id)?
+            .ok_or_else(|| anyhow!("no target device found"))
+    }
+
+    pub(super) async fn wait_for_network_pci_path(&mut self, qdev_id: &str) -> Result<PciPath> {
+        let deadline = tokio::time::Instant::now() + NETWORK_PCI_PATH_TIMEOUT;
+        loop {
+            if let Some(path) = self.find_device_by_qdev_id(qdev_id)? {
+                return Ok(path);
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(anyhow!("no target device found: {qdev_id}"));
+            }
+            // query-pci omits the children of a bridge until it has a secondary bus number.
+            tokio::time::sleep_until((now + NETWORK_PCI_PATH_POLL_INTERVAL).min(deadline)).await;
+        }
+    }
+
+    fn find_device_by_qdev_id(&mut self, qdev_id: &str) -> Result<Option<PciPath>> {
         let format_str = |vec: &Vec<i64>| -> String {
             vec.iter()
                 .map(|num| format!("{num:02x}"))
@@ -1101,11 +1123,11 @@ impl Qmp {
         for pci_info in pci.iter() {
             if let Some(_device) = get_pci_path_by_qdev_id(&pci_info.devices, qdev_id, &mut path) {
                 let pci_path = format_str(&path);
-                return PciPath::try_from(pci_path.as_str());
+                return PciPath::try_from(pci_path.as_str()).map(Some);
             }
         }
 
-        Err(anyhow!("no target device found"))
+        Ok(None)
     }
 
     /// Execute device_add for a block device. On failure, automatically

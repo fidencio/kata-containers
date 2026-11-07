@@ -1307,7 +1307,8 @@ impl QemuInner {
                 if !uses_native_ccw_bus() {
                     let frontend_id = format!("frontend-{}", virtio_net_device.get_netdev_id());
                     let pci_path = qmp
-                        .get_device_by_qdev_id(&frontend_id)
+                        .wait_for_network_pci_path(&frontend_id)
+                        .await
                         .context("get network device pci path")?;
                     network_device.config.pci_path = Some(pci_path);
                 }
