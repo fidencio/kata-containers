@@ -1,0 +1,79 @@
+name: Validate OPA 1.22.2 policy checks
+on:
+  push:
+    branches: [codex/validate-opa-1.22.2-20261107]
+permissions:
+  contents: read
+jobs:
+  static:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: opa
+            sha: 3368d8dc2c5adbd468594fa93ae792828b21c629
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GOPATH: ${{ github.workspace }}
+      COMPONENT: ${{ matrix.component }}
+    defaults:
+      run:
+        working-directory: ./src/github.com/fidencio/kata-containers
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ matrix.sha }}
+          path: ./src/github.com/fidencio/kata-containers
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify commit and install yq
+        env:
+          COMPONENT_SHA: ${{ matrix.sha }}
+          INSTALL_IN_GOPATH: "false"
+        run: |
+          test "$(git rev-parse HEAD)" = "$COMPONENT_SHA"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          git diff --check HEAD^ HEAD
+          ./ci/install_yq.sh
+          echo "GO_VERSION=$(yq '.languages.golang.version' versions.yaml)" >> "$GITHUB_ENV"
+          echo "ORAS_VERSION=$(yq '.externals.oras.version' versions.yaml)" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y moreutils yamllint
+          mkdir -p "$GOPATH/bin"
+          yamllint versions.yaml
+      - uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d
+        if: matrix.component == 'opa'
+        with:
+          version: ${{ env.ORAS_VERSION }}
+      - name: Install OPA and Regorus as in upstream static checks
+        if: matrix.component == 'opa'
+        env:
+          ARTEFACT_REPOSITORY: kata-containers/kata-containers
+        run: |
+          ./tests/install_opa.sh
+          opa version
+          echo '24e344d1fc394cd93dc75666f584cfb97c6981f7255af25f8d2979834317317b  /usr/local/bin/opa' | sha256sum -c -
+          ./tests/install_regorus.sh
+      - name: Run Kata's static checker with the selected OPA and Regorus
+        run: |
+          git update-ref refs/remotes/origin/main "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          export PATH="$PATH:$GOPATH/bin"
+          make static-checks
+      - name: Run the existing Dockerfile checker across all tracked Dockerfiles
+        if: matrix.component == 'hadolint'
+        run: |
+          bash -n tests/static-checks.sh
+          test_path=tests bash tests/static-checks.sh --repo-path "$PWD" --all --dockerfiles
+          "$GOPATH/bin/hadolint" --version
+      - name: Go module tidy
+        run: |
+          find . -name go.mod -print0 | while IFS= read -r -d '' module; do
+            (cd "$(dirname "$module")" && go mod tidy)
+          done
+          git diff --exit-code
