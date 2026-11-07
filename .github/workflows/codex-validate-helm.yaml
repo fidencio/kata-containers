@@ -1,0 +1,109 @@
+name: Validate Helm 4.3.1
+on:
+  push:
+    branches: [codex/validate-helm-4.3.1-20261107]
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 14f368c2db6f7b86449459d2a372e3c5379e08df
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify component commit and read Helm pin
+        id: helm-version
+        env:
+          INSTALL_IN_GOPATH: 'false'
+        run: |
+          test "$(git rev-parse HEAD)" = "14f368c2db6f7b86449459d2a372e3c5379e08df"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          git diff --check HEAD^ HEAD
+          bash -n tests/common.bash
+          ./ci/install_yq.sh
+          version=$(yq -e '.externals.helm.version' versions.yaml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install Helm as in release and payload workflows
+        uses: azure/setup-helm@fe7b79cd5ee1e45176fcad797de68ecaf3ca4814
+        with:
+          version: ${{ steps.helm-version.outputs.version }}
+      - name: Package and render chart without publication
+        run: |
+          test "$(helm version --template '{{.Version}}')" = "v4.3.1"
+          src=tools/packaging/kata-deploy/helm-chart/kata-deploy
+          temp="$(mktemp -d)"
+          cp -R "$src" "$temp/kata-deploy"
+          yq eval '.version = "0.0.0-validation" | .appVersion = "0.0.0-validation"' -i "$temp/kata-deploy/Chart.yaml"
+          yq eval '.image.reference = "quay.io/kata-containers/kata-deploy" | .image.tag = "validation"' -i "$temp/kata-deploy/values.yaml"
+          helm package "$temp/kata-deploy" -d "$temp"
+          chart="$temp/kata-deploy-0.0.0-validation.tgz"
+          helm lint "$chart"
+          helm template kata-deploy "$chart" > "$temp/rendered.yaml"
+          test -s "$temp/rendered.yaml"
+          sha256sum "$chart"
+          helm show chart "$chart"
+  templates:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 14f368c2db6f7b86449459d2a372e3c5379e08df
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install repository Helm pin and run cluster-free template tests
+        env:
+          USE_SUDO: 'false'
+          HELM_INSTALL_DIR: ${{ runner.temp }}/helm-bin
+          target_branch: main
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+          mkdir -p "$HELM_INSTALL_DIR"
+          export PATH="$HELM_INSTALL_DIR:$PATH"
+          source tests/common.bash
+          ensure_helm
+          test "$(helm version --template '{{.Version}}')" = "v4.3.1"
+          bats tests/functional/kata-deploy/kata-deploy-multi-install.bats
+  actionlint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 14f368c2db6f7b86449459d2a372e3c5379e08df
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7
+        with:
+          version: '1.7.12'
+  zizmor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 14f368c2db6f7b86449459d2a372e3c5379e08df
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@135698455da5c3b3e55f73f4419e481ab68cdd95
+        with:
+          advanced-security: false
+          annotations: true
+          persona: auditor
+          version: v1.22.0
+  shellcheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 14f368c2db6f7b86449459d2a372e3c5379e08df
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38
+        with:
+          severity: style
