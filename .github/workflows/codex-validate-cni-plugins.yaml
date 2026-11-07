@@ -1,0 +1,82 @@
+name: Validate CNI plugins 1.9.1
+on:
+  push:
+    branches: [codex/validate-cni-plugins-1.9.1-20261107]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04, suite: functional/kata-monitor, containerd: latest, vmm: qemu }
+          - { arch: amd64, runner: ubuntu-24.04, suite: integration/nydus, containerd: latest, vmm: qemu }
+          - { arch: amd64, runner: ubuntu-24.04, suite: integration/nydus, containerd: minimum, vmm: qemu }
+          - { arch: amd64, runner: ubuntu-24.04, suite: integration/cri-containerd, containerd: latest, vmm: qemu }
+          - { arch: s390x, runner: s390x-large, suite: integration/cri-containerd, containerd: latest, vmm: qemu }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    env:
+      CONTAINER_ENGINE: containerd
+      CONTAINERD_VERSION: ${{ matrix.containerd }}
+      KATA_HYPERVISOR: ${{ matrix.vmm }}
+      GOPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 680364476aa822b995871044c471ba8873097373
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify pin and upstream CNI artifact
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(git rev-parse HEAD)" = "680364476aa822b995871044c471ba8873097373"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          git diff --check HEAD^ HEAD
+          case "$ARCH" in
+            amd64) hash=b98f74a0f8522f0a83867178729c1aa70f2158f90c45a2ca8fa791db1c76b303 ;;
+            s390x) hash=5da91ae1b8a0a80fd83077c012bbfacc685e46c3abda72b1fdc1748e6c20fb0d ;;
+          esac
+          asset="cni-plugins-linux-$ARCH-v1.9.1.tgz"
+          curl -fsSLo "/tmp/$asset" "https://github.com/containernetworking/plugins/releases/download/v1.9.1/$asset"
+          printf '%s  /tmp/%s\n' "$hash" "$asset" | sha256sum -c -
+          tar -xzf "/tmp/$asset" -C /tmp ./bridge
+      - name: Run the existing dependency installation step
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUITE: ${{ matrix.suite }}
+        run: |
+          bash "tests/$SUITE/gha-run.sh" install-dependencies
+          cmp /tmp/bridge /opt/cni/bin/bridge
+          sudo /opt/cni/bin/bridge --version
+      - name: Fetch unchanged Kata artifact from the exact upstream base
+        if: matrix.suite != 'integration/cri-containerd'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          github-token: ${{ github.token }}
+          repository: kata-containers/kata-containers
+          run-id: 42316900241
+          name: kata-go-static-tarball-amd64
+          path: kata-artifacts
+      - name: Fetch unchanged tools artifact from the exact upstream base
+        if: matrix.suite == 'integration/nydus'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          github-token: ${{ github.token }}
+          repository: kata-containers/kata-containers
+          run-id: 42316900241
+          name: kata-tools-static-tarball-amd64
+          path: kata-tools-artifacts
+      - name: Run the upstream integration entry point
+        if: matrix.suite != 'integration/cri-containerd'
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          bash "tests/$SUITE/gha-run.sh" install-kata kata-artifacts
+          if [[ "$SUITE" == integration/nydus ]]; then
+            bash "tests/$SUITE/gha-run.sh" install-kata-tools kata-tools-artifacts
+          fi
+          bash "tests/$SUITE/gha-run.sh" run
