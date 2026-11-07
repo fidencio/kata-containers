@@ -1,0 +1,95 @@
+name: Validate OpenVMM 0.4.0 and Kata Rust shim
+on:
+  push:
+    branches: [codex/validate-openvmm-0.4.0-20261107]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  schema:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 49140689b09ca038b0fccf7d20ae6914a964e07c
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Re-run the repository generator from the released tag
+        env:
+          INSTALL_IN_GOPATH: 'false'
+        run: |
+          test "$(git rev-parse HEAD)" = "49140689b09ca038b0fccf7d20ae6914a964e07c"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          git diff --check HEAD^ HEAD
+          ./ci/install_yq.sh
+          make -C src/runtime-rs/crates/hypervisor update-proto
+          git diff --exit-code
+          sha256sum src/runtime-rs/crates/hypervisor/src/openvmm/protos/vmservice.proto
+  tarballs:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04, asset: openvmm, timeout: 40 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: openvmm, timeout: 35 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: shim-v2-rust, timeout: 35 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: shim-v2-rust, timeout: 40 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    env:
+      KATA_ASSET: ${{ matrix.asset }}
+      TAR_OUTPUT: ${{ matrix.asset }}.tar.gz
+      PUSH_TO_REGISTRY: 'no'
+      USE_CACHE: 'no'
+      RELEASE: 'no'
+      TARGET_BRANCH: main
+      ARTEFACT_REGISTRY: ghcr.io
+      ARTEFACT_REGISTRY_USERNAME: ${{ github.actor }}
+      ARTEFACT_REGISTRY_PASSWORD: ${{ github.token }}
+      MEASURED_ROOTFS: ${{ matrix.asset == 'shim-v2-rust' && 'yes' || 'no' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 49140689b09ca038b0fccf7d20ae6914a964e07c
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact component commit
+        run: |
+          test "$(git rev-parse HEAD)" = "49140689b09ca038b0fccf7d20ae6914a964e07c"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          git diff --check HEAD^ HEAD
+      - name: Fetch unchanged measured-rootfs inputs from exact upstream base
+        if: matrix.asset == 'shim-v2-rust'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          github-token: ${{ github.token }}
+          repository: kata-containers/kata-containers
+          run-id: 42316900241
+          pattern: kata-artifacts-${{ matrix.arch }}-rootfs-image*
+          path: kata-artifacts
+          merge-multiple: true
+      - name: Build the upstream tarball from the changed tree
+        run: |
+          if [[ "$KATA_ASSET" == shim-v2-rust ]]; then
+            make install-prebuilt-artifacts
+            make DEPS= "${KATA_ASSET}-tarball"
+          else
+            make "${KATA_ASSET}-tarball"
+          fi
+          build_dir="$(readlink -f build)"
+          mkdir -p kata-build
+          cp "$build_dir"/kata-static-"${KATA_ASSET}"*.tar.* kata-build/
+          sha256sum kata-build/*
+          if [[ "$KATA_ASSET" == openvmm ]]; then
+            src="$(find "$build_dir" -type d -name openvmm-src -print -quit)"
+            test -n "$src"
+            test "$(git -C "$src" rev-parse HEAD)" = "$(git -C "$src" rev-list -n1 openvmm-v0.4.0)"
+            git -C "$src" log -1 --format='%H %D'
+          fi
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: openvmm-0.4.0-${{ matrix.arch }}-${{ matrix.asset }}
+          path: kata-build/*.tar.*
+          retention-days: 5
+          if-no-files-found: error
