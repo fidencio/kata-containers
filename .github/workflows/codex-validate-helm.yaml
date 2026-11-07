@@ -107,3 +107,14 @@ jobs:
       - uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38
         with:
           severity: style
+          ignore_paths: >-
+            **/vendor/**
+            tests/metrics
+            tests/integration/stdio
+          ignore_names: >-
+            gha-stability-run.sh
+            kubernetes_stability.sh
+            kubernetes_stressng.sh
+            kubernetes_soak_test.sh
+            kata-manager.sh
+          additional_files: tests/common.bash
