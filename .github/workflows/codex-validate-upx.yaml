@@ -1,0 +1,136 @@
+name: Validate UPX 5.3.0 NVIDIA rootfs
+on:
+  push:
+    branches: [codex/validate-upx-5.3.0-20261107]
+permissions:
+  contents: read
+jobs:
+  prereqs:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04, asset: agent, timeout: 40 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: busybox, timeout: 40 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: kernel-nvidia-gpu, timeout: 40 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: pause-image, timeout: 40 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: coco-guest-components, timeout: 40 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: agent, timeout: 35 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: busybox, timeout: 35 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: kernel-nvidia-gpu, timeout: 35 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    env:
+      KATA_ASSET: ${{ matrix.asset }}
+      TAR_OUTPUT: ${{ matrix.asset }}.tar.gz
+      TARGET_BRANCH: main
+      ARTEFACT_REGISTRY: ghcr.io
+      ARTEFACT_REGISTRY_USERNAME: ${{ github.actor }}
+      ARTEFACT_REGISTRY_PASSWORD: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+      VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
+      RELEASE: "no"
+      USE_CACHE: "no"
+      PUSH_TO_REGISTRY: "no"
+      KBUILD_SIGN_PIN: ""
+      USE_DEVMAPPER: ${{ matrix.asset == 'agent' && 'yes' || 'no' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: b6d8582e9c96d500cfb4ddc72547a64765f19140
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact component commit
+        run: |
+          test "$(git rev-parse HEAD)" = "b6d8582e9c96d500cfb4ddc72547a64765f19140"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          git diff --check HEAD^ HEAD
+      - name: Build upstream rootfs prerequisite
+        run: |
+          make "${KATA_ASSET}-tarball"
+          build_dir=$(readlink -f build)
+          mkdir -p kata-build
+          cp "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.* kata-build/
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: kata-artifacts-${{ matrix.arch }}-${{ matrix.asset }}
+          path: kata-build/kata-static-${{ matrix.asset }}.tar.zst
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: startsWith(matrix.asset, 'kernel-nvidia-gpu')
+        with:
+          name: kata-artifacts-${{ matrix.arch }}-${{ matrix.asset }}-modules
+          path: kata-build/kata-static-${{ matrix.asset }}-modules.tar.zst
+          if-no-files-found: error
+          retention-days: 3
+  rootfs:
+    needs: prereqs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04, asset: rootfs-image-nvidia-gpu, timeout: 25 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: rootfs-image-nvidia, timeout: 25 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: rootfs-image-nvidia-gpu-extension, timeout: 25 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: rootfs-image-nvidia-gpu-confidential, timeout: 25 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: rootfs-image-nvidia-gpu, timeout: 35 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: rootfs-image-nvidia, timeout: 35 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: rootfs-image-nvidia-gpu-extension, timeout: 35 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    env:
+      KATA_ASSET: ${{ matrix.asset }}
+      TAR_OUTPUT: ${{ matrix.asset }}.tar.gz
+      TARGET_BRANCH: main
+      ARTEFACT_REGISTRY: ghcr.io
+      ARTEFACT_REGISTRY_USERNAME: ${{ github.actor }}
+      ARTEFACT_REGISTRY_PASSWORD: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+      VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
+      RELEASE: "no"
+      USE_CACHE: "no"
+      PUSH_TO_REGISTRY: "no"
+      KBUILD_SIGN_PIN: ""
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: b6d8582e9c96d500cfb4ddc72547a64765f19140
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact component commit
+        run: |
+          test "$(git rev-parse HEAD)" = "b6d8582e9c96d500cfb4ddc72547a64765f19140"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          git diff --check HEAD^ HEAD
+      - name: Check pinned UPX release artifact
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          case "$ARCH" in
+            amd64) digest=79cea8a50b6fa102d10c7b79a419cd77dead3cc2d78661de2dc5e5815dc505c1 ;;
+            arm64) digest=2a4afa860ac7aa6968f88df7841823746e5d00ba56affdf9342c2f5254fb776f ;;
+          esac
+          asset="upx-5.3.0-${ARCH}_linux.tar.xz"
+          curl -fsSLo "/tmp/$asset" "https://github.com/upx/upx/releases/download/v5.3.0/$asset"
+          printf '%s  /tmp/%s\n' "$digest" "$asset" | sha256sum -c -
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          pattern: kata-artifacts-${{ matrix.arch }}-*
+          path: kata-artifacts
+          merge-multiple: true
+      - name: Run the upstream NVIDIA rootfs tarball build
+        run: |
+          make install-prebuilt-artifacts
+          make DEPS= "${KATA_ASSET}-tarball" 2>&1 | tee "$RUNNER_TEMP/rootfs-build.log"
+          grep -E 'upx-5\.3\.0|UPX_VERSION=5\.3\.0|UPX 5\.3\.0' "$RUNNER_TEMP/rootfs-build.log"
+          build_dir=$(readlink -f build)
+          mkdir -p kata-build
+          cp "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.* kata-build/
+          sha256sum kata-build/*
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: upx-5.3.0-${{ matrix.arch }}-${{ matrix.asset }}
+          path: kata-build/*.tar.*
+          if-no-files-found: error
+          retention-days: 3
