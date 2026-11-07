@@ -12,14 +12,14 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 49140689b09ca038b0fccf7d20ae6914a964e07c
+          ref: fbdf7205ba7401f0466fdc6d4ad94be997b42045
           fetch-depth: 0
           persist-credentials: false
       - name: Re-run the repository generator from the released tag
         env:
           INSTALL_IN_GOPATH: 'false'
         run: |
-          test "$(git rev-parse HEAD)" = "49140689b09ca038b0fccf7d20ae6914a964e07c"
+          test "$(git rev-parse HEAD)" = "fbdf7205ba7401f0466fdc6d4ad94be997b42045"
           test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
           git diff --check HEAD^ HEAD
           ./ci/install_yq.sh
@@ -51,12 +51,12 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 49140689b09ca038b0fccf7d20ae6914a964e07c
+          ref: fbdf7205ba7401f0466fdc6d4ad94be997b42045
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact component commit
         run: |
-          test "$(git rev-parse HEAD)" = "49140689b09ca038b0fccf7d20ae6914a964e07c"
+          test "$(git rev-parse HEAD)" = "fbdf7205ba7401f0466fdc6d4ad94be997b42045"
           test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
           git diff --check HEAD^ HEAD
       - name: Fetch unchanged measured-rootfs inputs from exact upstream base
