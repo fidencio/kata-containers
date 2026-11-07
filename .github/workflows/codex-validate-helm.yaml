@@ -118,3 +118,11 @@ jobs:
             kubernetes_soak_test.sh
             kata-manager.sh
           additional_files: tests/common.bash
+  deploy-integration:
+    uses: kata-containers/kata-containers/.github/workflows/run-kata-deploy-tests.yaml@8fd86af5a8099749e0b4a01339abee7056ea1970
+    with:
+      commit-hash: 14f368c2db6f7b86449459d2a372e3c5379e08df
+      target-branch: ''
+      registry: quay.io
+      repo: kata-containers/kata-deploy-ci
+      tag: kata-containers-latest
