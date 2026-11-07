@@ -1,0 +1,59 @@
+name: CI flake candidate - QEMU hypervisor build
+on:
+  push:
+    branches:
+      - codex/ci-flake/validate-nerdctl-network-pci-path-79fa546e2
+    paths:
+      - .github/workflows/codex-ci-flake-nerdctl-pci-path.yaml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  qemu-hypervisor:
+    if: ${{ github.repository == 'fidencio/kata-containers' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      FIX_SHA: a1da14a84dd3acecf26a46fcbca33b3e367c6820
+      SKIP_GO_VERSION_CHECK: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: a1da14a84dd3acecf26a46fcbca33b3e367c6820
+          persist-credentials: false
+      - name: Verify revision and runner
+        run: |
+          test "$(git rev-parse HEAD)" = "$FIX_SHA"
+          git rev-parse HEAD
+          uname -a
+          free -h
+          df -h .
+          test "$(uname -m)" = x86_64
+      - name: Install runtime-rs build dependencies
+        id: setup
+        env:
+          INSTALL_IN_GOPATH: "false"
+        run: |
+          ./ci/install_yq.sh
+          ./tests/install_rust.sh
+          echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+          sudo apt-get update
+          sudo apt-get -y install musl-tools protobuf-compiler
+      - name: Check hypervisor formatting and lints
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          rustc --version
+          make -C src/runtime-rs check PACKAGES=hypervisor
+      - name: Build the hypervisor crate
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: cargo build --locked -p hypervisor
+      - name: Check the QEMU network hotplug capability
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          cargo test --locked -p hypervisor --lib qemu::inner::tests::test_network_device_hotplug_capability -- --exact | tee qemu-hotplug-capability.log
+          grep -F 'test qemu::inner::tests::test_network_device_hotplug_capability ... ok' qemu-hotplug-capability.log
