@@ -1,0 +1,125 @@
+name: Validate libseccomp 2.6.1
+on:
+  push:
+    branches: [codex/validate-libseccomp-2.6.1-20261107]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            asset: agent
+            timeout: 40
+          - arch: amd64
+            runner: ubuntu-24.04
+            asset: agent-substrate
+            timeout: 40
+          - arch: amd64
+            runner: ubuntu-24.04
+            asset: agent-ctl
+            timeout: 35
+          - arch: amd64
+            runner: ubuntu-24.04
+            asset: genpolicy
+            timeout: 35
+          - arch: amd64
+            runner: ubuntu-24.04
+            asset: kata-ctl
+            timeout: 35
+          - arch: amd64
+            runner: ubuntu-24.04
+            asset: trace-forwarder
+            timeout: 35
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            asset: agent
+            timeout: 35
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            asset: agent-substrate
+            timeout: 35
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            asset: genpolicy
+            timeout: 30
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            asset: kata-ctl
+            timeout: 30
+          - arch: ppc64le
+            runner: ubuntu-24.04-ppc64le
+            asset: agent
+            timeout: 55
+          - arch: s390x
+            runner: ubuntu-26.04-s390x
+            asset: agent
+            timeout: 40
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 6d20574f8b18a038e72a8160f98205034c52badf
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build libseccomp consumer from the exact update commit
+        env:
+          KATA_ASSET: ${{ matrix.asset }}
+          TAR_OUTPUT: ${{ matrix.asset }}.tar.gz
+          TARGET_BRANCH: main
+          USE_CACHE: "no"
+          PUSH_TO_REGISTRY: "no"
+          ARTEFACT_REGISTRY: ghcr.io
+          RELEASE: "no"
+          KBUILD_SIGN_PIN: ""
+          USE_DEVMAPPER: ${{ matrix.asset == 'agent' && 'yes' || 'no' }}
+          VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "6d20574f8b18a038e72a8160f98205034c52badf"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          set -o pipefail
+          make "${KATA_ASSET}-tarball" 2>&1 | tee /tmp/build-libseccomp.log
+          grep -F "Build and install libseccomp version 2.6.1" /tmp/build-libseccomp.log
+          build_dir=$(readlink -f build)
+          cat "${build_dir}/${KATA_ASSET}-version"
+          sha256sum "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.*
+          mkdir -p kata-build
+          cp "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.* "${build_dir}/${KATA_ASSET}-version" kata-build/
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: libseccomp-2.6.1-${{ matrix.arch }}-${{ matrix.asset }}
+          path: kata-build/
+          if-no-files-found: error
+          retention-days: 7
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 6d20574f8b18a038e72a8160f98205034c52badf
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify pins and whitespace
+        run: |
+          git diff --check HEAD^ HEAD
+          sudo apt-get update
+          sudo apt-get install -y yamllint
+          yamllint versions.yaml
+          bash -n tools/packaging/scripts/lib.sh
+          curl -fsSLo /tmp/libseccomp-2.6.1.tar.gz https://github.com/seccomp/libseccomp/releases/download/v2.6.1/libseccomp-2.6.1.tar.gz
+          echo "501f66c667225d53791b97e1d7cf85ab764c297d04881f60f38f451c4b0ee1be  /tmp/libseccomp-2.6.1.tar.gz" | sha256sum -c -
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5
+        with:
+          go-version: '1.26.10'
+      - name: Go module tidy
+        run: |
+          find . -name go.mod -print0 | while IFS= read -r -d '' module; do
+            (cd "$(dirname "$module")" && go mod tidy)
+          done
+          git diff --exit-code
