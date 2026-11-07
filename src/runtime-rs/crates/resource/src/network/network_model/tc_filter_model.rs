@@ -56,6 +56,10 @@ impl NetworkModel for TcFilterModel {
             .await
             .context("add virt ingress")?;
 
+        // A retried attach can add a redirect its failed predecessor already
+        // added. The kernel appends it as another filter instance; the
+        // earlier one steals every matching packet first, so the duplicate
+        // changes nothing and goes away with the qdisc.
         handle
             .traffic_filter(tap_index as i32)
             .add()
@@ -118,24 +122,37 @@ fn is_absent(err: &rtnetlink::Error) -> bool {
 }
 
 /// Add an ingress qdisc to the device at the given index, retrying on EBUSY
-/// with linear backoff (10ms, 20ms, ...).
+/// with linear backoff (10ms, 20ms, ...). A qdisc that is already there is
+/// left alone: a retried attach, after one that failed between the TC setup
+/// and the device hotplug, finds its own earlier work.
 async fn add_ingress_qdisc(handle: &Handle, index: i32) -> Result<(), rtnetlink::Error> {
     let mut last_err = handle.qdisc().add(index).ingress().execute().await;
     for i in 1..QDISC_ADD_ATTEMPTS {
         match &last_err {
             Ok(()) => return Ok(()),
+            Err(e) if is_eexist(e) => return Ok(()),
             Err(e) if !is_ebusy(e) => break,
             Err(_) => {}
         }
         tokio::time::sleep(Duration::from_millis(QDISC_ADD_BACKOFF_MS * i)).await;
         last_err = handle.qdisc().add(index).ingress().execute().await;
     }
-    last_err
+    match last_err {
+        Err(ref e) if is_eexist(e) => Ok(()),
+        other => other,
+    }
 }
 
 fn is_ebusy(err: &rtnetlink::Error) -> bool {
     match err {
         rtnetlink::Error::NetlinkError(msg) => msg.code.is_some_and(|c| c.get() == -libc::EBUSY),
+        _ => false,
+    }
+}
+
+fn is_eexist(err: &rtnetlink::Error) -> bool {
+    match err {
+        rtnetlink::Error::NetlinkError(msg) => msg.code.is_some_and(|c| c.get() == -libc::EEXIST),
         _ => false,
     }
 }
@@ -152,8 +169,31 @@ pub async fn fetch_index(handle: &Handle, name: &str) -> Result<u32> {
 mod tests {
     use std::sync::Arc;
 
+    use test_utils::skip_if_not_root;
+
     use super::*;
     use crate::network::network_pair::{NetworkInterface, TapInterface};
+    use crate::network::utils::link::{create_link, net_test_utils::delete_link, LinkType};
+
+    // Runs in the sudo test pass; a retried attach after one that failed
+    // between the TC setup and the device hotplug finds the ingress qdisc
+    // it added before, and that must not fail the retry.
+    #[tokio::test]
+    async fn adding_the_ingress_qdisc_twice_is_fine() {
+        skip_if_not_root!();
+        let name = "___test_qdisc";
+        let (connection, handle, _) = rtnetlink::new_connection().unwrap();
+        let thread_handler = tokio::spawn(connection);
+        defer!({
+            thread_handler.abort();
+        });
+
+        create_link(name, LinkType::Tap, 1).unwrap();
+        let index = fetch_index(&handle, name).await.unwrap() as i32;
+        add_ingress_qdisc(&handle, index).await.unwrap();
+        add_ingress_qdisc(&handle, index).await.unwrap();
+        delete_link(&handle, name).await.unwrap();
+    }
 
     #[tokio::test]
     async fn deleting_tc_filter_after_cni_removes_interface_is_idempotent() {
