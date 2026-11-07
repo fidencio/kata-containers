@@ -1,0 +1,69 @@
+name: Validate NVIDIA Container Toolkit 1.20.1 in guest images
+on:
+  push:
+    branches: [codex/validate-nvidia-ctk-1.20.1-20261107]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  rootfs:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04, asset: rootfs-image-nvidia-gpu, timeout: 25 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: rootfs-image-nvidia, timeout: 25 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: rootfs-image-nvidia-gpu-extension, timeout: 25 }
+          - { arch: amd64, runner: ubuntu-24.04, asset: rootfs-image-nvidia-gpu-confidential, timeout: 25 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: rootfs-image-nvidia-gpu, timeout: 35 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: rootfs-image-nvidia, timeout: 35 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, asset: rootfs-image-nvidia-gpu-extension, timeout: 35 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    env:
+      KATA_ASSET: ${{ matrix.asset }}
+      TAR_OUTPUT: ${{ matrix.asset }}.tar.gz
+      TARGET_BRANCH: main
+      ARTEFACT_REGISTRY: ghcr.io
+      ARTEFACT_REGISTRY_USERNAME: ${{ github.actor }}
+      ARTEFACT_REGISTRY_PASSWORD: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+      VERIFY_COCO_EXTENSION_PROVENANCE: "yes"
+      RELEASE: "no"
+      USE_CACHE: "no"
+      PUSH_TO_REGISTRY: "no"
+      KBUILD_SIGN_PIN: ""
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: d0da8739c8d59981065f06b63d6e6c472cabffc8
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact component commit
+        run: |
+          test "$(git rev-parse HEAD)" = "d0da8739c8d59981065f06b63d6e6c472cabffc8"
+          test "$(git rev-parse HEAD^)" = "8fd86af5a8099749e0b4a01339abee7056ea1970"
+          git diff --check HEAD^ HEAD
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          github-token: ${{ github.token }}
+          repository: fidencio/kata-containers
+          run-id: 42356666401
+          pattern: kata-artifacts-${{ matrix.arch }}-*
+          path: kata-artifacts
+          merge-multiple: true
+      - name: Run the upstream NVIDIA rootfs tarball build
+        run: |
+          make install-prebuilt-artifacts
+          make DEPS= "${KATA_ASSET}-tarball" 2>&1 | tee "$RUNNER_TEMP/rootfs-build.log"
+          grep -F 'Setting up nvidia-container-toolkit-base (1.20.1-1)' "$RUNNER_TEMP/rootfs-build.log"
+          build_dir=$(readlink -f build)
+          mkdir -p kata-build
+          cp "${build_dir}"/kata-static-"${KATA_ASSET}"*.tar.* kata-build/
+          sha256sum kata-build/*
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: nvidia-ctk-1.20.1-${{ matrix.arch }}-${{ matrix.asset }}
+          path: kata-build/*.tar.*
+          if-no-files-found: error
+          retention-days: 3
