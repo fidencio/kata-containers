@@ -19,12 +19,12 @@ jobs:
       COMPONENT: ${{ matrix.component }}
     defaults:
       run:
-        working-directory: ./src/github.com/fidencio/kata-containers
+        working-directory: ./src/github.com/kata-containers/kata-containers
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ matrix.sha }}
-          path: ./src/github.com/fidencio/kata-containers
+          path: ./src/github.com/kata-containers/kata-containers
           fetch-depth: 0
           persist-credentials: false
       - name: Verify commit and install yq
@@ -62,6 +62,7 @@ jobs:
           ./tests/install_regorus.sh
       - name: Run Kata's static checker with the selected OPA and Regorus
         run: |
+          git remote set-url origin https://github.com/kata-containers/kata-containers.git
           git update-ref refs/remotes/origin/main "8fd86af5a8099749e0b4a01339abee7056ea1970"
           export PATH="$PATH:$GOPATH/bin"
           make static-checks
