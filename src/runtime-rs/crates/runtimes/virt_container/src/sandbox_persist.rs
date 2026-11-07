@@ -150,8 +150,6 @@ mod tests {
     const PHYSICAL_ENDPOINT_FIELDS: &[(&str, &str)] = &[
         ("bdf", "the device the rebind acts on"),
         ("driver", "the host driver it binds back"),
-        ("vendor_id", "names the device to the driver"),
-        ("device_id", "names the device to the driver"),
     ];
     const CGROUP_FIELDS: &[(&str, &str)] = &[
         ("path", "the sandbox cgroup to destroy"),

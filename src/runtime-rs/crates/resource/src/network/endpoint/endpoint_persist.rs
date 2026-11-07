@@ -7,14 +7,12 @@
 use serde::{Deserialize, Serialize};
 
 /// What recovery takes to give a passed-through device back to its host
-/// driver: the address to act on, the driver to bind, and the IDs the bind
-/// needs. Nothing else of a physical endpoint is recorded.
+/// driver: the address to act on and the driver to bind. Nothing else of a
+/// physical endpoint is recorded.
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct PhysicalEndpointState {
     pub bdf: String,
     pub driver: String,
-    pub vendor_id: String,
-    pub device_id: String,
 }
 
 /// An endpoint, as the recovery of a dead shim needs it. Every field has a

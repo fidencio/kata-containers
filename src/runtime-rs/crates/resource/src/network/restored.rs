@@ -119,8 +119,6 @@ mod tests {
             physical_endpoint: Some(PhysicalEndpointState {
                 bdf: "0000:41:00.2".to_string(),
                 driver: "mlx5_core".to_string(),
-                vendor_id: "0x15b3".to_string(),
-                device_id: "0x101e".to_string(),
             }),
         }];
         let network = RestoredNetwork::new(endpoints.clone(), Some("/run/netns/cni-1".into()));
