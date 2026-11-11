@@ -15,6 +15,9 @@ setup() {
 	[ "${KATA_HYPERVISOR}" == "fc" ] && skip "test not working see: ${fc_limitations}"
 	setup_common || die "setup_common failed"
 
+	# A PV is not namespaced, so one left by an earlier run is still there.
+	kubectl delete pv pv-volume --ignore-not-found --timeout=60s
+
 	node=$(get_one_kata_node)
 	tmp_file=$(mktemp -u /tmp/data.XXXX)
 	exec_host "$node" mkdir $tmp_file
