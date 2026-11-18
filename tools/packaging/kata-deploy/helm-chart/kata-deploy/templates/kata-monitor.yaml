@@ -34,7 +34,7 @@ spec:
       tolerations:
 {{- toYaml . | nindent 8 }}
 {{- end }}
-{{- with .Values.priorityClassName }}
+{{- with include "kata-deploy.priorityClassName" . | trim }}
       priorityClassName: {{ . | quote }}
 {{- end }}
       containers:

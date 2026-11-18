@@ -75,7 +75,7 @@ spec:
 {{- with include "kata-deploy.dispatcherPlacement" $root | trim }}
 {{- . | nindent 6 }}
 {{- end }}
-{{- with $root.Values.priorityClassName }}
+{{- with include "kata-deploy.priorityClassName" $root | trim }}
       priorityClassName: {{ . | quote }}
 {{- end }}
       containers:

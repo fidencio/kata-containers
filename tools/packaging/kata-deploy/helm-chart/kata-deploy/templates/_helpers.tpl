@@ -52,6 +52,33 @@ katacontainers.io/kata-version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 
 {{/*
+GKE COS keeps /opt read-only. Its executable /home/kubernetes/bin mount can
+hold a separate Kata installation without changing GKE's bundled binaries.
+*/}}
+{{- define "kata-deploy.installationPrefix" -}}
+{{- if .Values.env.installationPrefix -}}
+{{- .Values.env.installationPrefix -}}
+{{- else if eq .Values.k8sDistribution "gke" -}}
+/home/kubernetes/bin
+{{- end -}}
+{{- end -}}
+
+{{/*
+GKE restricts system-critical priority classes outside system namespaces.
+A null value chooses the distribution default; an explicit string, including
+an empty string to disable priority, takes precedence.
+*/}}
+{{- define "kata-deploy.priorityClassName" -}}
+{{- if kindIs "invalid" .Values.priorityClassName -}}
+{{- if ne .Values.k8sDistribution "gke" -}}
+system-node-critical
+{{- end -}}
+{{- else -}}
+{{- .Values.priorityClassName -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Set the correct containerd conf path depending on the k8s distribution.
 If containerd.configDir is set explicitly, use that instead.
 */}}
@@ -592,6 +619,9 @@ surface much later, as a missing command or a layer conversion failure.
 {{- define "kata-deploy.nodeBinaries" -}}
 {{- $entries := .Values.nodeBinaries | default dict -}}
 {{- if $entries -}}
+{{- if eq .Values.k8sDistribution "gke" -}}
+{{- fail "nodeBinaries is not supported with k8sDistribution: gke: COS keeps /usr/local/bin read-only. Use the tools already provided by the node image." -}}
+{{- end -}}
 {{- if ne (.Values.deploymentMode | default "daemonset") "job" -}}
 {{- fail (printf "\n\nERROR: nodeBinaries is set (%s), which requires deploymentMode: job.\n\nInstalling binaries onto the node relies on the staged install pipeline, where they are in place before the host check looks for them. The DaemonSet runs the whole install in one container and has no such ordering.\n" (keys $entries | sortAlpha | join ", ")) -}}
 {{- end -}}
@@ -833,7 +863,7 @@ e.g. `{{- include "kata-deploy.commonEnv" . | nindent 8 }}`.
   value: {{ $pullTypeMappingPpc64le | quote }}
 {{- end }}
 - name: INSTALLATION_PREFIX
-  value: {{ .Values.env.installationPrefix | quote }}
+  value: {{ include "kata-deploy.installationPrefix" . | quote }}
 - name: MULTI_INSTALL_SUFFIX
   value: {{ .Values.env.multiInstallSuffix | quote }}
 {{- $snapshotterSetup := include "kata-deploy.getSnapshotterSetup" . | trim -}}
@@ -1395,7 +1425,7 @@ spec:
 {{- toYaml . | nindent 8 }}
 {{- end }}
 {{- end }}
-{{- with $root.Values.priorityClassName }}
+{{- with include "kata-deploy.priorityClassName" $root | trim }}
       priorityClassName: {{ . | quote }}
 {{- end }}
 {{- if eq $stage "install" }}
@@ -1435,7 +1465,11 @@ spec:
 {{- /* After the revert, so containerd is no longer converting layers with them.
        Unconditional, and driven by the marker alone, so that an uninstall tidies
        up even when the entries were dropped from the values first. */}}
+{{- /* GKE COS cannot install nodeBinaries, and mounting its absent
+       /usr/local/bin would fail even when there is no marker to remove. */}}
+{{- if ne $root.Values.k8sDistribution "gke" }}
 {{- include "kata-deploy.nodeBinariesInstallContainer" (dict "root" $root "name" "node-binaries-remove") | nindent 8 }}
+{{- end }}
       containers:
 {{- include "kata-deploy.stageContainer" (dict "root" $root "name" "remove-artifacts" "action" "cleanup-stage-remove-artifacts" "privileged" false "mountHost" true "mountModulesLoad" true "mountUdevRules" true "selinuxDomain" "kata_deploy_artifacts_t") | nindent 8 }}
 {{- end }}
@@ -1503,7 +1537,7 @@ Compute the host install directory (must match Config::from_env in the binary):
   {installationPrefix}/opt/kata[-{multiInstallSuffix}]
 */}}
 {{- define "kata-deploy.installDir" -}}
-{{- $prefix := .Values.env.installationPrefix | default "" -}}
+{{- $prefix := include "kata-deploy.installationPrefix" . -}}
 {{- $dir := printf "%s/opt/kata" $prefix -}}
 {{- if .Values.env.multiInstallSuffix -}}
 {{- $dir = printf "%s-%s" $dir .Values.env.multiInstallSuffix -}}
@@ -1840,12 +1874,20 @@ host. Emitted at column 0; indent with `nindent` at the call site.
 - name: host-usr-sbin
   mountPath: /host-usr/sbin
   readOnly: true
+{{- if eq .Values.k8sDistribution "gke" }}
+{{- /* COS has /usr/local but need not have bin or sbin beneath it. Mounting
+       those absent directories makes containerd try to create them on /usr. */}}
+- name: host-usr-local
+  mountPath: /host-usr-local
+  readOnly: true
+{{- else }}
 - name: host-usr-local-bin
   mountPath: /host-usr-local/bin
   readOnly: true
 - name: host-usr-local-sbin
   mountPath: /host-usr-local/sbin
   readOnly: true
+{{- end }}
 - name: host-bin
   mountPath: /host-bin
   readOnly: true
@@ -1907,12 +1949,19 @@ indent with `nindent` at the call site.
 - name: host-usr-sbin
   hostPath:
     path: /usr/sbin
+{{- if eq .Values.k8sDistribution "gke" }}
+- name: host-usr-local
+  hostPath:
+    path: /usr/local
+    type: Directory
+{{- else }}
 - name: host-usr-local-bin
   hostPath:
     path: /usr/local/bin
 - name: host-usr-local-sbin
   hostPath:
     path: /usr/local/sbin
+{{- end }}
 - name: host-bin
   hostPath:
     path: /bin

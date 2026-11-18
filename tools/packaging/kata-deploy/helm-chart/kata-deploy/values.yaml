@@ -290,7 +290,10 @@ monitor:
 # the two disagree, naming the value to set. Setting containerd.configDir takes
 # that check out of the way, being an explicit override of this derivation; it
 # says nothing about the kubelet, so this value still applies there.
-k8sDistribution: "k8s"  # k8s, k3s, rke2, k0s, microk8s
+# gke targets Standard clusters with COS: it defaults the installation prefix
+# to /home/kubernetes/bin, omits system-critical pod priority, and adapts the
+# host-tool discovery mounts to COS's read-only filesystem.
+k8sDistribution: "k8s"  # k8s, k3s, rke2, k0s, microk8s, gke
 
 # Containerd configuration overrides
 # These override the auto-detected paths based on k8sDistribution.
@@ -460,7 +463,7 @@ podAnnotations: {}
 #         topologyKey: kubernetes.io/hostname
 affinity: {}
 
-# Priority class name for the kata-deploy DaemonSet pods.
+# Priority class for installer, dispatcher and monitor pods.
 #
 # kata-deploy is an infrastructure DaemonSet that installs Kata runtime
 # artifacts on every node. If it gets evicted under node pressure, the
@@ -475,7 +478,9 @@ affinity: {}
 # priorityClassName: system-node-critical
 # priorityClassName: system-cluster-critical
 # priorityClassName: my-custom-priority-class
-priorityClassName: "system-node-critical"
+# null chooses system-node-critical, or no priority class for gke.
+# An explicit string overrides the distribution default; "" disables priority.
+priorityClassName: ~
 
 # Update strategy for the kata-deploy DaemonSet
 # Default is RollingUpdate with maxUnavailable: 1
@@ -840,6 +845,8 @@ runtimeClasses:
   overheadEnabled: true
 
 env:
+  # Empty selects /home/kubernetes/bin for gke, and no prefix elsewhere.
+  # An explicit prefix overrides that default. Artefacts go under <prefix>/opt/kata.
   installationPrefix: ""
   hostOS: ""
   # Suffix for multi-install deployments to avoid conflicts between multiple Kata installations

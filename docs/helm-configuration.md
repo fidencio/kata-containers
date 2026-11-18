@@ -297,7 +297,7 @@ and passes the descriptors to the VMM, so the VMM user needs no access to them.
 
     Reboot persistence relies on the node running a udev implementation that
     reads `/etc/udev/rules.d` (`systemd-udevd` or eudev) and keeping `/etc`
-    across reboots — true of every supported `k8sDistribution`. A node using
+    across reboots. GKE COS rebuilds `/etc` at boot. A node using
     busybox `mdev`, or an image that rebuilds `/etc` at boot such as
     Bottlerocket, accepts the file and never acts on it. The devices are still
     reconciled, so sandboxes run until the next reboot, but the permissions do
@@ -325,8 +325,55 @@ places, so the chart needs to be told which one this cluster is. The value picks
 host directory that gets mounted into the install:
 
 ```yaml title="values.yaml"
-k8sDistribution: k8s   # k8s | k3s | rke2 | k0s | microk8s
+k8sDistribution: k8s   # k8s | k3s | rke2 | k0s | microk8s | gke
 ```
+
+For GKE Standard with Container-Optimized OS (COS), select `gke`. This preset:
+
+- Defaults `env.installationPrefix` to `/home/kubernetes/bin`, an executable
+  mount on COS. Artefacts go under `/home/kubernetes/bin/opt/kata`, with
+  `env.multiInstallSuffix` appended when configured. The installer rewrites
+  runtime configuration paths to match; GKE's bundled binaries are preserved.
+- Omits pod priority by default, because GKE restricts system-critical priority
+  classes outside system namespaces.
+- Mounts the existing `/usr/local` directory read-only for host-tool discovery,
+  avoiding attempts to create absent `bin` and `sbin` directories on COS's
+  read-only filesystem. Cleanup also avoids these directories.
+- Uses `/etc/containerd/` and the standard containerd socket and kubelet root.
+
+An explicit non-empty `env.installationPrefix` overrides the GKE prefix.
+`priorityClassName: null` selects the distribution default: no priority for GKE,
+`system-node-critical` elsewhere. An explicit priority class overrides that
+choice; `priorityClassName: ""` disables priority on any distribution.
+
+For example, install the three tested Rust runtimes on one node pool:
+
+```bash
+helm upgrade --install kata-deploy ./tools/packaging/kata-deploy/helm-chart/kata-deploy \
+  --namespace kata-system --create-namespace \
+  --set k8sDistribution=gke \
+  --set 'nodeSelector.cloud\.google\.com/gke-nodepool=kata-pool' \
+  --set shims.disableAll=true \
+  --set shims.clh-runtime-rs.enabled=true \
+  --set shims.dragonball.enabled=true \
+  --set shims.qemu-runtime-rs.enabled=true \
+  --timeout 20m
+```
+
+The default `deploymentMode: job` uses the job dispatcher. Select a Standard
+node pool with nested virtualization enabled and a supported machine type;
+`k8sDistribution` does not provision nodes or enable virtualization. The GKE
+preset was tested on x86 COS nodes with containerd drop-in imports enabled.
+Autopilot installation and accelerator passthrough are not covered by this
+preset. `nodeBinaries` is rejected for GKE because its destination,
+`/usr/local/bin`, is read-only on COS.
+
+This preset does not enable lifecycle reconciliation. COS rebuilds `/etc` on
+reboot, and GKE can replace nodes during repairs and upgrades. Re-run
+`helm upgrade` after these events to restore runtime registration before
+scheduling Kata workloads. Changing the installation prefix of an existing
+release requires uninstalling that release first, so cleanup uses its original
+paths.
 
 Any other value means the default location, `/etc/containerd/` — so `kubeadm` and
 `vanilla` are as good as `k8s`. Set `containerd.configDir` instead if your
