@@ -244,4 +244,21 @@ scheduling:
 {{- end }}
 {{- end }}
 {{- end }}
+{{- if .Values.envd }}
+{{- range $shim := $enabledShims }}
+{{- $shimConfig := index $.Values.shims $shim }}
+{{- $supported := or (eq $shim "dragonball") (regexMatch "^(qemu|clh)(-.+)?-runtime-rs$" $shim) }}
+{{- $arches := $shimConfig.supportedArches | default list }}
+{{- if and $supported (or (has "amd64" $arches) (has "arm64" $arches)) }}
+{{- $config := index $runtimeClassConfigs $shim }}
+{{- if $config }}
+{{- $effectiveConfig := deepCopy $config }}
+{{- if and $shimConfig.runtimeClass $shimConfig.runtimeClass.overhead }}
+{{- $effectiveConfig = mergeOverwrite $effectiveConfig $shimConfig.runtimeClass.overhead }}
+{{- end }}
+{{ include "kata-deploy.runtimeclass" (dict "root" $ "shim" $shim "config" $effectiveConfig "shimConfig" $shimConfig "variant" "envd" "nameOverride" "" "useShimNodeSelectors" $useShimNodeSelectors "nfdRulesActive" $nfdRulesActive) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end }}

@@ -504,6 +504,26 @@ pub async fn configure_containerd_runtime(
     Ok(())
 }
 
+/// Inherit base-shim annotations only for generated variants.
+fn custom_runtime_annotation_extras(
+    config: &Config,
+    custom_runtime: &CustomRuntime,
+) -> Vec<String> {
+    let mut extras = config.extra_pod_annotations_for(&custom_runtime.handler);
+    // Variants are this install's own copy of a shim, so they inherit what the
+    // chart asked for that shim. A user's custom runtime only shares its base
+    // configuration, and gets what it was configured with.
+    if custom_runtime.debug_variant || custom_runtime.envd {
+        extras.extend(config.extra_pod_annotations_for(&custom_runtime.base_config));
+    }
+    if custom_runtime.envd {
+        extras.push("io.katacontainers.config.runtime.experimental_envd".to_string());
+    }
+    extras.sort();
+    extras.dedup();
+    extras
+}
+
 /// Custom runtimes use an isolated config directory under custom-runtimes/{handler}/
 pub async fn configure_custom_containerd_runtime(
     config: &Config,
@@ -532,15 +552,7 @@ pub async fn configure_custom_containerd_runtime(
         "{}/share/defaults/kata-containers/custom-runtimes/{}/configuration-{}.toml",
         config.dest_dir, custom_runtime.handler, custom_runtime.base_config
     );
-    let mut extras = config.extra_pod_annotations_for(&custom_runtime.handler);
-    // Variants are this install's own copy of a shim, so they inherit what the
-    // chart asked for that shim. A user's custom runtime only shares its base
-    // configuration, and gets what it was configured with.
-    if custom_runtime.debug_variant {
-        extras.extend(config.extra_pod_annotations_for(&custom_runtime.base_config));
-    }
-    extras.sort();
-    extras.dedup();
+    let extras = custom_runtime_annotation_extras(config, custom_runtime);
     let pod_annotations = pod_annotations_for_kata_config(Path::new(&kata_config_path), &extras)?;
     let container_annotations = DEFAULT_CONTAINER_ANNOTATIONS.to_string();
 
@@ -1140,6 +1152,32 @@ mod tests {
     use std::path::Path;
     use tempfile::NamedTempFile;
 
+    #[test]
+    fn envd_annotation_is_forwarded_only_for_envd_variants() {
+        let mut config = test_config("qemu-runtime-rs", "/opt/kata");
+        config.containerd_shim_extra_pod_annotations_for_arch =
+            vec!["qemu-runtime-rs:example.com/base".into()];
+        let mut runtime = CustomRuntime {
+            handler: "kata-qemu-runtime-rs-envd".into(),
+            base_config: "qemu-runtime-rs".into(),
+            drop_in_file: None,
+            containerd_snapshotter: None,
+            crio_pull_type: None,
+            debug_variant: false,
+            devkit: false,
+            envd: false,
+        };
+        assert!(custom_runtime_annotation_extras(&config, &runtime).is_empty());
+        runtime.envd = true;
+        assert_eq!(
+            custom_runtime_annotation_extras(&config, &runtime),
+            vec![
+                "example.com/base",
+                "io.katacontainers.config.runtime.experimental_envd"
+            ]
+        );
+    }
+
     /// The handler set every reconcile is measured against, so a shim or a
     /// custom runtime missing here is one the next redeploy withdraws.
     #[test]
@@ -1155,6 +1193,7 @@ mod tests {
             crio_pull_type: None,
             debug_variant: false,
             devkit: false,
+            envd: false,
         }];
 
         assert_eq!(

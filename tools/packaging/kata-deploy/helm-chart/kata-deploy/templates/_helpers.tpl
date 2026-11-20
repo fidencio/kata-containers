@@ -916,6 +916,10 @@ e.g. `{{- include "kata-deploy.commonEnv" . | nindent 8 }}`.
 - name: DEVKIT
   value: "true"
 {{- end }}
+{{- if .Values.envd }}
+- name: ENVD
+  value: "true"
+{{- end }}
 {{- with .Values.startupTaints }}
 - name: STARTUP_TAINTS
   value: {{ join "," . | quote }}

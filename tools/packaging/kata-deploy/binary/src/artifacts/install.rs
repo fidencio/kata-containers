@@ -157,6 +157,7 @@ pub async fn install_artifacts(config: &Config, container_runtime: &str) -> Resu
     // Same for devkit, which leaves an extension image behind on top of its
     // handler dirs (e.g. devkit toggled off, or a shim removed).
     reconcile_devkit_artifacts(config)?;
+    reconcile_envd_artifacts(config)?;
 
     Ok(())
 }
@@ -447,7 +448,7 @@ fn install_custom_runtime_configs(config: &Config, distribution: Option<&str>) -
             let verity_params = devkit_verity_params(&config.dest_dir);
             let hypervisor_name = get_hypervisor_name(&runtime.base_config)?;
             let existing = if Path::new(&dest_config).exists() {
-                read_guest_extension_images(Path::new(&dest_config), hypervisor_name)?
+                read_guest_extension_images(Path::new(&dest_config), hypervisor_name, "devkit")?
             } else {
                 warn!(
                     "devkit: base config {} is missing; the devkit drop-in will only \
@@ -464,6 +465,36 @@ fn install_custom_runtime_configs(config: &Config, distribution: Option<&str>) -
                     &existing,
                     &image_path,
                     verity_params.as_deref(),
+                    &config.dest_dir,
+                ),
+            )?;
+        }
+
+        if runtime.envd {
+            let share = Path::new(&config.dest_dir).join("share/kata-containers");
+            let image = share.join("kata-containers-envd-extension.img");
+            anyhow::ensure!(
+                image.is_file(),
+                "envd extension image missing: {}",
+                image.display()
+            );
+            let verity = fs::read_to_string(share.join("root_hash_envd-extension.txt"))
+                .context("read envd extension integrity parameters")?;
+            anyhow::ensure!(
+                !verity.trim().is_empty(),
+                "envd extension integrity parameters are empty"
+            );
+            let hypervisor = get_hypervisor_name(&runtime.base_config)?;
+            let existing =
+                read_guest_extension_images(Path::new(&dest_config), hypervisor, "kata-envd")?;
+            write_drop_in_file(
+                &config_d_dir,
+                "25-envd.toml",
+                &generate_envd_drop_in(
+                    hypervisor,
+                    &existing,
+                    &image.to_string_lossy(),
+                    verity.trim(),
                     &config.dest_dir,
                 ),
             )?;
@@ -600,6 +631,58 @@ fn reconcile_debug_variant_artifacts(config: &Config) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Remove envd runtime directories and payloads no longer selected by this install.
+fn reconcile_envd_artifacts(config: &Config) -> Result<()> {
+    let known: HashSet<&str> = config
+        .custom_runtimes
+        .iter()
+        .map(|runtime| runtime.handler.as_str())
+        .collect();
+    let runtimes =
+        Path::new(&config.dest_dir).join("share/defaults/kata-containers/custom-runtimes");
+    let share = Path::new(&config.host_install_dir).join("share/kata-containers");
+    reconcile_envd_artifacts_in(
+        &known,
+        config.multi_install_suffix.as_deref(),
+        &runtimes,
+        &share,
+        config.envd_enabled,
+    )
+}
+
+fn reconcile_envd_artifacts_in(
+    known: &HashSet<&str>,
+    suffix: Option<&str>,
+    runtimes: &Path,
+    share: &Path,
+    enabled: bool,
+) -> Result<()> {
+    for shim in ALL_SHIMS {
+        let handler = variant_handler(shim, suffix, Variant::Envd);
+        let path = runtimes.join(&handler);
+        if !known.contains(handler.as_str()) && path.exists() {
+            fs::remove_dir_all(&path)
+                .with_context(|| format!("remove stale envd runtime {}", path.display()))?;
+        }
+    }
+    if !enabled {
+        for name in [
+            "kata-containers-envd-extension.img",
+            "root_hash_envd-extension.txt",
+            "configuration-envd.toml",
+            "envd.sha256",
+            "envd-source.txt",
+        ] {
+            let path = share.join(name);
+            if path.exists() {
+                fs::remove_file(&path)
+                    .with_context(|| format!("remove unused envd artifact {}", path.display()))?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -851,6 +934,9 @@ fn collect_required_tarballs(config: &Config) -> Result<HashSet<String>> {
     // by the devkit flag rather than per-shim membership.
     if config.devkit_enabled {
         required.insert("rootfs-image-devkit-extension".to_string());
+    }
+    if config.envd_enabled {
+        required.insert("rootfs-image-envd-extension".to_string());
     }
 
     Ok(required)
@@ -1839,15 +1925,15 @@ struct GuestExtension {
 }
 
 /// Read the base config's existing `guest_extension_images`, in order, so the
-/// drop-in can re-emit them ahead of devkit (the merge replaces the array, so
-/// anything omitted is lost). Any pre-existing `devkit` entry is skipped, since
-/// the drop-in always appends its own.
+/// drop-in can re-emit them ahead of its managed extension (the merge replaces
+/// the array, so anything omitted is lost). Its own previous entry is skipped.
 fn read_guest_extension_images(
     config_file: &Path,
     hypervisor_name: &str,
+    managed_name: &str,
 ) -> Result<Vec<GuestExtension>> {
     let content = fs::read_to_string(config_file)
-        .with_context(|| format!("Failed to read config for devkit extension: {config_file:?}"))?;
+        .with_context(|| format!("Failed to read config for guest extension: {config_file:?}"))?;
     let doc = content
         .parse::<DocumentMut>()
         .with_context(|| format!("Failed to parse config as TOML: {config_file:?}"))?;
@@ -1864,7 +1950,7 @@ fn read_guest_extension_images(
             let name = t.get("name").and_then(|i| i.as_str());
             let path = t.get("path").and_then(|i| i.as_str());
             if let (Some(name), Some(path)) = (name, path) {
-                if name == "devkit" {
+                if name == managed_name {
                     continue;
                 }
                 out.push(GuestExtension {
@@ -1894,6 +1980,29 @@ fn push_guest_extension(
         entry["verity_params"] = value(vp);
     }
     images.push(entry);
+}
+
+fn generate_envd_drop_in(
+    hypervisor: &str,
+    existing: &[GuestExtension],
+    image_path: &str,
+    verity_params: &str,
+    dest_dir: &str,
+) -> String {
+    let mut images = ArrayOfTables::new();
+    for ext in existing {
+        let path = reprefix_installed_path(&ext.path, dest_dir).unwrap_or_else(|| ext.path.clone());
+        push_guest_extension(&mut images, &ext.name, &path, ext.verity_params.as_deref());
+    }
+    push_guest_extension(&mut images, "kata-envd", image_path, Some(verity_params));
+    let mut hv = Table::new();
+    hv.insert("guest_extension_images", Item::ArrayOfTables(images));
+    let mut hypervisors = Table::new();
+    hypervisors.set_implicit(true);
+    hypervisors.insert(hypervisor, Item::Table(hv));
+    let mut doc = DocumentMut::new();
+    doc.insert("hypervisor", Item::Table(hypervisors));
+    format!("# Envd guest extension; generated by kata-deploy\n{doc}")
 }
 
 /// Generate the devkit drop-in (25-devkit.toml): enable the agent debug console
@@ -2126,6 +2235,110 @@ pub(crate) mod tests {
     use super::*;
     use rstest::rstest;
 
+    fn envd_runtime() -> crate::config::CustomRuntime {
+        crate::config::CustomRuntime {
+            handler: "kata-qemu-runtime-rs-envd".into(),
+            base_config: "qemu-runtime-rs".into(),
+            drop_in_file: None,
+            containerd_snapshotter: None,
+            crio_pull_type: None,
+            debug_variant: false,
+            devkit: false,
+            envd: true,
+        }
+    }
+
+    #[test]
+    fn envd_install_preserves_extensions_and_requires_integrity() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config("qemu-runtime-rs", dir.path().to_str().unwrap());
+        config.envd_enabled = true;
+        config.custom_runtimes = vec![envd_runtime()];
+        install_base_config(
+            &config,
+            "qemu-runtime-rs",
+            r#"
+[hypervisor.qemu]
+kernel_params = ""
+[[hypervisor.qemu.guest_extension_images]]
+name = "coco"
+path = "/opt/kata/share/kata-containers/coco.img"
+verity_params = "coco-integrity"
+[[hypervisor.qemu.guest_extension_images]]
+name = "devkit"
+path = "/opt/kata/share/kata-containers/devkit.img"
+[[hypervisor.qemu.guest_extension_images]]
+name = "kata-envd"
+path = "/old/envd.img"
+"#,
+        );
+        let share = dir.path().join("share/kata-containers");
+        fs::create_dir_all(&share).unwrap();
+        fs::write(share.join("kata-containers-envd-extension.img"), "image").unwrap();
+        assert!(install_custom_runtime_configs(&config, None).is_err());
+        fs::write(share.join("root_hash_envd-extension.txt"), "\n").unwrap();
+        assert!(install_custom_runtime_configs(&config, None).is_err());
+        fs::write(
+            share.join("root_hash_envd-extension.txt"),
+            "root_hash=test\n",
+        )
+        .unwrap();
+        install_custom_runtime_configs(&config, None).unwrap();
+        let dropins = dir.path().join(
+            "share/defaults/kata-containers/custom-runtimes/kata-qemu-runtime-rs-envd/config.d",
+        );
+        let doc = fs::read_to_string(dropins.join("25-envd.toml"))
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        let images = doc["hypervisor"]["qemu"]["guest_extension_images"]
+            .as_array_of_tables()
+            .unwrap();
+        assert_eq!(
+            images
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["coco", "devkit", "kata-envd"]
+        );
+        assert_eq!(
+            images.get(0).unwrap()["path"].as_str().unwrap(),
+            format!("{}/coco.img", share.display())
+        );
+        assert_eq!(
+            images.get(2).unwrap()["verity_params"].as_str(),
+            Some("root_hash=test")
+        );
+        assert!(!dropins.join("20-debug.toml").exists());
+        assert!(doc.get("agent").is_none());
+    }
+
+    #[test]
+    fn envd_reconciliation_cleans_only_this_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtimes = dir.path().join("runtimes");
+        let share = dir.path().join("share");
+        for handler in [
+            "kata-qemu-runtime-rs-blue-envd",
+            "kata-clh-runtime-rs-blue-envd",
+            "kata-qemu-runtime-rs-other-envd",
+        ] {
+            fs::create_dir_all(runtimes.join(handler)).unwrap();
+        }
+        fs::create_dir(&share).unwrap();
+        fs::write(share.join("kata-containers-envd-extension.img"), "image").unwrap();
+        let known = HashSet::from(["kata-qemu-runtime-rs-blue-envd"]);
+        reconcile_envd_artifacts_in(&known, Some("blue"), &runtimes, &share, true).unwrap();
+        assert!(runtimes.join("kata-qemu-runtime-rs-blue-envd").exists());
+        assert!(!runtimes.join("kata-clh-runtime-rs-blue-envd").exists());
+        assert!(share.join("kata-containers-envd-extension.img").exists());
+        reconcile_envd_artifacts_in(&HashSet::new(), Some("blue"), &runtimes, &share, false)
+            .unwrap();
+        assert!(!runtimes.join("kata-qemu-runtime-rs-blue-envd").exists());
+        assert!(runtimes.join("kata-qemu-runtime-rs-other-envd").exists());
+        assert!(!share.join("kata-containers-envd-extension.img").exists());
+    }
+
     #[rstest]
     #[case("qemu", "qemu")]
     #[case("qemu-tdx", "qemu")]
@@ -2319,7 +2532,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let existing = read_guest_extension_images(tmp.path(), "qemu").unwrap();
+        let existing = read_guest_extension_images(tmp.path(), "qemu", "devkit").unwrap();
         let names: Vec<_> = existing.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["coco", "gpu"]);
         assert_eq!(existing[0].verity_params.as_deref(), Some("root_hash=abc"));
@@ -2332,7 +2545,7 @@ pub(crate) mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(tmp.path(), "[hypervisor.qemu]\npath = \"/usr/bin/qemu\"\n").unwrap();
 
-        assert!(read_guest_extension_images(tmp.path(), "qemu")
+        assert!(read_guest_extension_images(tmp.path(), "qemu", "devkit")
             .unwrap()
             .is_empty());
     }
@@ -2694,6 +2907,7 @@ pub(crate) mod tests {
                 crio_pull_type: None,
                 debug_variant: false,
                 devkit: false,
+                envd: false,
             },
             crate::config::CustomRuntime {
                 handler: "kata-qemu-debug".to_string(),
@@ -2703,6 +2917,7 @@ pub(crate) mod tests {
                 crio_pull_type: None,
                 debug_variant: true,
                 devkit: false,
+                envd: false,
             },
         ];
 
@@ -2729,6 +2944,7 @@ pub(crate) mod tests {
             installation_prefix: None,
             multi_install_suffix: None,
             devkit_enabled: false,
+            envd_enabled: false,
             helm_post_delete_hook: false,
             experimental_setup_snapshotter: None,
             erofs_merge_mode: None,
@@ -2941,7 +3157,8 @@ enable_debug = false
         let config = test_config("qemu-snp", dest_dir);
         let base_config = install_base_config(&config, "qemu-snp", &confidential_base_config());
 
-        let existing = read_guest_extension_images(Path::new(&base_config), "qemu").unwrap();
+        let existing =
+            read_guest_extension_images(Path::new(&base_config), "qemu", "devkit").unwrap();
         let image_path =
             format!("{dest_dir}/share/kata-containers/kata-containers-devkit-extension.img");
         let content = generate_devkit_drop_in("qemu", &existing, &image_path, None, dest_dir);

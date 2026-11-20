@@ -168,6 +168,8 @@ pub struct CustomRuntime {
     /// True for the devkit runtime (kata-<shim>-devkit), which is a debug variant
     /// with an extra drop-in wiring the extension image and debug console shell.
     pub devkit: bool,
+    /// True for a container envd extension runtime.
+    pub envd: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -215,6 +217,8 @@ pub struct Config {
     /// the devkit drop-in enables the agent debug console, which must never come
     /// up without debug.
     pub devkit_enabled: bool,
+    /// Install the envd extension for supported Rust runtime variants.
+    pub envd_enabled: bool,
     /// EROFS snapshotter rw-layer backing mode ("disk" or "memory").
     pub erofs_snapshotter_mode: Option<String>,
     /// Enable dm-verity integrity for EROFS lower layers.
@@ -432,6 +436,23 @@ impl Config {
             );
         }
 
+        if env::var("ENVD").unwrap_or_default() == "true" {
+            let envd_shims: Vec<String> = shims_for_arch
+                .iter()
+                .filter(|shim| envd_supported(shim, &arch))
+                .cloned()
+                .collect();
+            synthesize_variant_runtimes(
+                Variant::Envd,
+                &envd_shims,
+                multi_install_suffix.as_deref(),
+                snapshotter_handler_mapping_for_arch.as_deref(),
+                pull_type_mapping_for_arch.as_deref(),
+                &mut custom_runtimes,
+            );
+        }
+        let envd_enabled = custom_runtimes.iter().any(|runtime| runtime.envd);
+
         // Enable the custom-runtime code paths if either source produced entries.
         let custom_runtimes_enabled = !custom_runtimes.is_empty();
 
@@ -522,6 +543,7 @@ impl Config {
             custom_runtimes_enabled,
             custom_runtimes,
             devkit_enabled,
+            envd_enabled,
             erofs_snapshotter_mode,
             erofs_dmverity,
             rootless_shims_for_arch,
@@ -1131,6 +1153,7 @@ fn parse_custom_runtimes(arch: &str) -> Result<Vec<CustomRuntime>> {
             crio_pull_type,
             debug_variant: false,
             devkit: false,
+            envd: false,
         });
     }
 
@@ -1176,8 +1199,7 @@ fn lookup_mapping_value(mapping: &str, shim: &str) -> Option<String> {
 }
 
 /// A RuntimeClass kata-deploy synthesizes for a shim, in addition to the plain
-/// one. Both carry guest debug configuration, which is what keeps it off the
-/// plain RuntimeClass and its kernel cmdline stable for measurements.
+/// one. Guest settings and extension devices are isolated from the plain class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variant {
     /// kata-<shim>-debug: guest debug configuration.
@@ -1185,6 +1207,8 @@ pub enum Variant {
     /// kata-<shim>-devkit: the same, plus the devkit extension image and the
     /// debug console shell it carries.
     Devkit,
+    /// kata-<shim>-envd: the envd executable extension, without guest debug.
+    Envd,
 }
 
 impl Variant {
@@ -1193,6 +1217,7 @@ impl Variant {
         match self {
             Self::Debug => "debug",
             Self::Devkit => "devkit",
+            Self::Envd => "envd",
         }
     }
 }
@@ -1270,10 +1295,20 @@ fn synthesize_variant_runtimes(
             drop_in_file: None,
             containerd_snapshotter,
             crio_pull_type,
-            debug_variant: true,
+            debug_variant: variant != Variant::Envd,
             devkit: variant == Variant::Devkit,
+            envd: variant == Variant::Envd,
         });
     }
+}
+
+/// Only these architectures ship the envd image, and only these Rust
+/// hypervisors implement extension disk attachment and the container launcher.
+fn envd_supported(shim: &str, arch: &str) -> bool {
+    matches!(arch, "x86_64" | "aarch64")
+        && (shim == "dragonball"
+            || ((shim.starts_with("qemu-") || shim.starts_with("clh-"))
+                && shim.ends_with("-runtime-rs")))
 }
 
 /// Get default shims list for a specific architecture
@@ -1411,6 +1446,7 @@ mod tests {
             "STARTUP_TAINTS",
             "CUSTOM_RUNTIMES_ENABLED",
             "DEVKIT",
+            "ENVD",
         ];
         for var in &vars {
             std::env::remove_var(var);
@@ -1587,7 +1623,65 @@ mod tests {
         let config = Config::from_env().unwrap();
 
         assert!(!config.devkit_enabled);
+        assert!(!config.envd_enabled);
         assert!(config.custom_runtimes.iter().all(|r| !r.devkit));
+        cleanup_env_vars();
+    }
+
+    #[test]
+    fn envd_requires_supported_arch_and_rust_hypervisor() {
+        for arch in ["x86_64", "aarch64", "s390x", "ppc64le"] {
+            for shim in [
+                "qemu",
+                "qemu-runtime-rs",
+                "qemu-nvidia-gpu-runtime-rs",
+                "clh",
+                "clh-runtime-rs",
+                "dragonball",
+                "fc",
+                "remote",
+                "openvmm-azure-runtime-rs",
+            ] {
+                let expected = matches!(arch, "x86_64" | "aarch64")
+                    && matches!(
+                        shim,
+                        "qemu-runtime-rs"
+                            | "qemu-nvidia-gpu-runtime-rs"
+                            | "clh-runtime-rs"
+                            | "dragonball"
+                    );
+                assert_eq!(envd_supported(shim, arch), expected, "{arch}: {shim}");
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn envd_variants_inherit_base_settings_without_enabling_debug() {
+        setup_minimal_env();
+        set_arch_var("SHIMS", "qemu qemu-runtime-rs");
+        set_arch_var("SNAPSHOTTER_HANDLER_MAPPING", "qemu-runtime-rs:erofs");
+        set_arch_var("PULL_TYPE_MAPPING", "qemu-runtime-rs:guest-pull");
+        std::env::set_var("MULTI_INSTALL_SUFFIX", "test");
+        std::env::set_var("ENVD", "true");
+        let config = Config::from_env().unwrap();
+        let runtimes: Vec<_> = config
+            .custom_runtimes
+            .iter()
+            .filter(|runtime| runtime.envd)
+            .collect();
+        if matches!(get_arch().unwrap().as_str(), "x86_64" | "aarch64") {
+            assert!(config.envd_enabled);
+            assert_eq!(runtimes.len(), 1);
+            assert_eq!(runtimes[0].handler, "kata-qemu-runtime-rs-test-envd");
+            assert_eq!(runtimes[0].containerd_snapshotter.as_deref(), Some("erofs"));
+            assert_eq!(runtimes[0].crio_pull_type.as_deref(), Some("guest-pull"));
+            assert!(!runtimes[0].debug_variant);
+            assert!(!runtimes[0].devkit);
+        } else {
+            assert!(!config.envd_enabled);
+            assert!(runtimes.is_empty());
+        }
         cleanup_env_vars();
     }
 

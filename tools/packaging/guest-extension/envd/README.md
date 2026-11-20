@@ -49,7 +49,8 @@ GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=fa
 ```
 
 Use `GOARCH=amd64` for an x86-64 guest. Keep the upstream source revision with
-your build records. This prototype does not fetch a binary or choose its version.
+your build records. The standalone packaging command does not fetch a binary or
+choose its version.
 Static linking is required because execution happens after switching to the
 container's root filesystem, where the guest's dynamic loader is unavailable.
 The builder inspects the binary without executing it, so its architecture can
@@ -83,6 +84,34 @@ Build the Rust runtime and agent with PR #14118 applied. The packaging prototype
 alone does not add the PR's container integration to an existing Kata release.
 The base guest must already include Kata's extension mount helpers and generator.
 
+### Helm deployment
+
+Use a kata-deploy image built with this branch's installer and envd component
+tarball, plus a guest agent and Rust runtime containing PR #14118. Released
+images without those changes cannot provide the integration.
+
+Add `envd: true` to your existing chart values, or pass `--set envd=true` to
+your Helm install/upgrade command. For each enabled Rust QEMU or Cloud Hypervisor
+shim, and Dragonball, this creates an additional `kata-<shim>-envd`
+RuntimeClass on supported amd64/arm64 configurations. For example, use
+`kata-qemu-runtime-rs-envd`. `env.multiInstallSuffix: blue` makes that
+`kata-qemu-runtime-rs-blue-envd` instead.
+
+Kata-deploy extracts the envd component and writes `25-envd.toml` under the
+variant's own configuration directory. The drop-in preserves existing extension
+entries, appends `kata-envd` with its integrity parameters, and honors custom
+installation prefixes. Containerd is configured to forward the experimental
+annotation for these handlers. The base shim's snapshotter and pull settings are
+inherited. Guest debugging stays off unless you select a separate debug class.
+
+The plain RuntimeClasses are unchanged. Setting `envd: false` on an upgrade
+removes the envd variants and their unused artifacts. Helm does not set workload
+annotations or inject environment variables: each target container still opts
+in as shown below. In a mixed-architecture cluster, select amd64 or arm64 nodes
+for these Pods; the extension is not built for s390x or ppc64le.
+
+### Manual configuration
+
 Copy the extension image to the host path in `configuration-envd.toml`. Merge
 that fragment into the runtime configuration, preserving all existing extension
 entries. Change `hypervisor.qemu` to `hypervisor.clh` or `hypervisor.dragonball`
@@ -106,7 +135,9 @@ metadata:
     io.katacontainers.config.runtime.experimental_envd: >-
       {"args":["-isnotfc","-no-cgroups","-port","49983"]}
 spec:
-  runtimeClassName: kata
+  runtimeClassName: kata-qemu-runtime-rs-envd
+  nodeSelector:
+    kubernetes.io/arch: amd64
   containers:
     - name: app
       image: ubuntu:resolute
@@ -122,7 +153,9 @@ spec:
 ```
 
 For containerd CRI, add the experimental annotation to the runtime's
-`pod_annotations` allowlist. Confirm the RuntimeClass selects the Rust runtime.
+`pod_annotations` allowlist when configuring manually. Helm's envd handlers do
+this automatically. Use the RuntimeClass mapped to your configured Rust runtime
+for manual installations, and `kubernetes.io/arch: arm64` for ARM nodes.
 The arguments above match upstream envd's flag-based CLI. Check them against the
 binary you supply; `serve --addr` in the PR's examples describes a different CLI.
 `-isnotfc` disables Firecracker metadata integration; `-no-cgroups` leaves cgroup
