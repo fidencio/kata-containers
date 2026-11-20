@@ -158,6 +158,7 @@ options:
 	rootfs-image
 	rootfs-image-confidential
 	rootfs-image-coco-extension
+	rootfs-image-envd-extension
 	rootfs-image-mariner
 	rootfs-image-substrate
 	rootfs-initrd
@@ -945,6 +946,28 @@ install_image_coco_extension() {
 
 	popd >/dev/null
 	rm -rf "${pull_dir}"
+}
+
+install_image_envd_extension() {
+	case "${ARCH}" in
+		x86_64|aarch64) ;;
+		*) die "envd extension is unsupported on ${ARCH}" ;;
+	esac
+	local component="rootfs-image-envd-extension"
+	local envd_commit
+	envd_commit="$(get_from_kata_deps ".externals.envd.commit")"
+	latest_artefact="$(get_kata_version)-envd-${envd_commit}"
+	latest_artefact+="-$(get_last_modification "${repo_root_dir}/tools/packaging/static-build/envd")"
+	latest_artefact+="-$(get_last_modification "${repo_root_dir}/tools/packaging/guest-extension/envd")"
+	latest_artefact+="-$(get_last_modification "${repo_root_dir}/tools/osbuilder/image-builder")"
+	latest_artefact+="-$(get_last_modification "${repo_root_dir}/tools/osbuilder/scripts")"
+	latest_artefact+="-$(get_last_modification "${repo_root_dir}/versions.yaml")"
+	latest_builder_image="$(get_envd_image_name)"
+	install_cached_tarball_component \
+		"${component}" "${latest_artefact}" "${latest_builder_image}" \
+		"${final_tarball_name}" "${final_tarball_path}" && return 0
+
+	DESTDIR="${destdir}" bash "${static_build_dir}/envd/build.sh"
 }
 
 # Install the generic devkit debug extension image (erofs+verity): a
@@ -2159,6 +2182,8 @@ handle_build() {
 	rootfs-image-coco-extension) install_image_coco_extension ;;
 
 	rootfs-image-devkit-extension) install_image_devkit_extension ;;
+
+	rootfs-image-envd-extension) install_image_envd_extension ;;
 
 	rootfs-image-mariner) install_image_mariner ;;
 

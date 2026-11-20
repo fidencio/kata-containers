@@ -358,6 +358,10 @@ rootfs-image-confidential-tarball: $(DEPS)
 rootfs-image-coco-extension-tarball:
 	${MAKE} $@-build
 
+# Optional until the per-container envd launcher is available in the agent.
+rootfs-image-envd-extension-tarball:
+	${MAKE} $@-build
+
 # Self-contained debug rootfs (no kata-agent, kernel or driver tree), so it has
 # no build-time dependency on any other target.
 DEPS :=

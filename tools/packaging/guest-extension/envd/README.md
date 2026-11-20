@@ -13,6 +13,24 @@ No envd systemd unit, base-image overlay, or component manifest is needed.
 
 ## Build
 
+The standard build scripts can build envd from the source revision and Go
+toolchain pinned in `versions.yaml`, then package the extension:
+
+```bash
+make rootfs-image-envd-extension-tarball
+```
+
+This requires Docker and produces
+`build/kata-static-rootfs-image-envd-extension.tar.zst` (the root `build` link
+points into `tools/packaging/kata-deploy/local-build/build`). The archive carries
+the image, integrity parameters, configuration fragment, executable checksum,
+and source provenance under `/opt/kata/share/kata-containers/`.
+The image build verifies the payload and integrity tree before packaging.
+This target is opt-in and does not enable envd or add it to default release
+bundles. It has no dependency on an agent, kernel, or base-image build.
+
+### Package a supplied binary
+
 Use a Linux build machine with the dependencies of
 `tools/osbuilder/image-builder/image_builder.sh`, plus `binutils` and
 `coreutils`. The EROFS path builds without mounting filesystems or requiring root.
@@ -127,6 +145,6 @@ it. Guest seccomp must permit the fork, `execveat`, and envd's own system calls;
 agent policy must permit the experimental annotation.
 
 This prototype builds a measured EROFS extension through the existing image
-builder. It does not add release packaging, automatic deployment, Firecracker
+builder. It does not add automatic deployment, Firecracker
 extension attachment, or agent-as-init mounting support. Full validation requires
 booting a Kata guest with the PR and exercising envd inside a workload container.

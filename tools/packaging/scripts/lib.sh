@@ -215,6 +215,11 @@ get_openvmm_image_name() {
 	echo "${BUILDER_REGISTRY}:openvmm-$(get_last_modification "${openvmm_script_dir}")-$(uname -m)"
 }
 
+get_envd_image_name() {
+	local envd_script_dir="${repo_root_dir}/tools/packaging/static-build/envd"
+	echo "${BUILDER_REGISTRY}:envd-$(get_from_kata_deps ".externals.envd.toolchain")-$(get_last_modification "${envd_script_dir}")-$(uname -m)"
+}
+
 get_virtiofsd_image_name() {
 	ARCH=${ARCH:-$(uname -m)}
 	case ${ARCH} in
