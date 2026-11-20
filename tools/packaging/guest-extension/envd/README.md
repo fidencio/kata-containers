@@ -26,8 +26,13 @@ points into `tools/packaging/kata-deploy/local-build/build`). The archive carrie
 the image, integrity parameters, configuration fragment, executable checksum,
 and source provenance under `/opt/kata/share/kata-containers/`.
 The image build verifies the payload and integrity tree before packaging.
-This target is opt-in and does not enable envd or add it to default release
-bundles. It has no dependency on an agent, kernel, or base-image build.
+GitHub Actions builds the extension independently in the amd64 and arm64 asset
+matrices, including the standard artifact upload, registry cache, and provenance
+steps. Both CI and local builds include it in the Rust runtime's
+`kata-static.tar.zst` bundle. It is excluded from the Go runtime and Substrate
+bundles. Packaging does not enable envd; runtime configuration and container
+opt-in are still required. The extension target has no dependency on an agent,
+kernel, or base-image build.
 
 ### Package a supplied binary
 

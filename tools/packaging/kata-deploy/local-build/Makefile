@@ -36,6 +36,7 @@ BASE_SERIAL_TARBALLS = openvmm-tarball \
 	rootfs-image-confidential-tarball \
 	rootfs-image-coco-extension-tarball \
 	rootfs-image-devkit-extension-tarball \
+	rootfs-image-envd-extension-tarball \
 	rootfs-image-mariner-tarball \
 	rootfs-image-nvidia-gpu-tarball \
 	rootfs-image-nvidia-gpu-confidential-tarball \
@@ -77,6 +78,7 @@ BASE_SERIAL_TARBALLS = openvmm-tarball \
 	rootfs-image-confidential-tarball \
 	rootfs-image-coco-extension-tarball \
 	rootfs-image-devkit-extension-tarball \
+	rootfs-image-envd-extension-tarball \
 	rootfs-image-nvidia-gpu-tarball \
 	rootfs-image-nvidia-tarball \
 	rootfs-image-nvidia-gpu-extension-tarball \
@@ -358,7 +360,7 @@ rootfs-image-confidential-tarball: $(DEPS)
 rootfs-image-coco-extension-tarball:
 	${MAKE} $@-build
 
-# Optional until the per-container envd launcher is available in the agent.
+# Builds independently of the agent, kernel and base rootfs.
 rootfs-image-envd-extension-tarball:
 	${MAKE} $@-build
 

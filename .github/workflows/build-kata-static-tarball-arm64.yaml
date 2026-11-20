@@ -61,6 +61,7 @@ jobs:
           - pause-image
           - qemu
           - qemu-no-shared-fs
+          - rootfs-image-envd-extension
           - virtiofsd
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-arm64-${{ toJSON(matrix) }}

@@ -19,6 +19,7 @@ fixture() {
 }
 fixture agent-substrate usr/bin/kata-agent
 fixture rootfs-image-substrate opt/kata/share/kata-containers/kata-containers-substrate.img
+fixture rootfs-image-envd-extension opt/kata/share/kata-containers/kata-containers-envd-extension.img
 fixture kernel opt/kata/share/kata-containers/vmlinux-test
 ln -s vmlinux-test "${work}/kernel/opt/kata/share/kata-containers/vmlinux.container"
 tar --zstd -cf "${work}/components/kata-static-kernel.tar.zst" -C "${work}/kernel" .
@@ -41,6 +42,12 @@ for arch in amd64 arm64; do
 			exit 1
 		fi
 	done
+	# The optional envd payload ships with runtime-rs, whose launcher consumes it.
+	grep -q 'opt/kata/share/kata-containers/kata-containers-envd-extension.img' "${work}/kata-static.contents"
+	if grep -q 'envd' "${work}/kata-go-static.contents"; then
+		echo "Envd leaked into the Go runtime archive for ${arch}" >&2
+		exit 1
+	fi
 	mkdir "${work}/guest-${arch}"
 	tar --zstd -xf "${work}/kata-static-substrate.tar.zst" -C "${work}/guest-${arch}"
 	[[ $(find "${work}/guest-${arch}" -type f | wc -l) == 4 ]]
