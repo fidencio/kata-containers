@@ -18,7 +18,7 @@ use crate::{
     share_fs::{do_get_guest_path, do_get_host_path},
 };
 use agent::Storage;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use async_trait::async_trait;
 use hypervisor::{
     device::{
@@ -28,7 +28,10 @@ use hypervisor::{
     virtio_blk_modern::BlockSourceFormat,
     BlockConfigModern, BlockDeviceAio,
 };
-use kata_types::mount::Mount;
+use kata_types::mount::{
+    Mount, CONFIDENTIAL_LAYER_DESCRIPTOR, CONFIDENTIAL_LOWER_MOUNT, CONFIDENTIAL_UPPER_MOUNT,
+    MAX_CONFIDENTIAL_DESCRIPTOR_BYTES,
+};
 use kata_types::{
     gpt_disk::{
         extract_dmverity_annotation, extract_snapshot_id, generate_dmverity_options,
@@ -40,8 +43,8 @@ use kata_types::{
 use oci_spec::runtime as oci;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// EROFS rootfs type identifier
@@ -62,6 +65,8 @@ pub(crate) const DEFAULT_KATA_GUEST_ROOT_SHARED_FS: &str = "/run/kata-containers
 const X_CONTAINERD_MKDIR_PATH: &str = "X-containerd.mkdir.path=";
 /// Template for mkdir option passed to guest agent (X-kata.mkdir.path)
 const X_KATA_MKDIR_PATH: &str = "X-kata.mkdir.path=";
+const CRI_IMAGE_NAME: &str = "io.kubernetes.cri.image-name";
+const CRI_SANDBOX_IMAGE_NAME: &str = "io.kubernetes.cri.podsandbox.image-name";
 
 /// Create the per-container directory under the shared filesystem root.
 pub(crate) fn ensure_container_dir(sid: &str, cid: &str) -> Result<PathBuf> {
@@ -390,14 +395,104 @@ pub(crate) struct ErofsMultiLayerRootfs {
     generated_artifacts_dir: PathBuf,
 }
 
+pub fn is_confidential_rootfs(mounts: &[Mount]) -> bool {
+    mounts.iter().any(|mount| {
+        matches!(
+            mount.fs_type.as_str(),
+            CONFIDENTIAL_LOWER_MOUNT | CONFIDENTIAL_UPPER_MOUNT
+        )
+    })
+}
+
+fn confidential_descriptors(
+    mounts: &[Mount],
+    annotations: &HashMap<String, String>,
+) -> Result<Option<Vec<String>>> {
+    if !is_confidential_rootfs(mounts) {
+        return Ok(None);
+    }
+    let (upper, lowers) = mounts.split_last().context("missing confidential rootfs")?;
+    ensure!(
+        upper.fs_type == CONFIDENTIAL_UPPER_MOUNT
+            && !lowers.is_empty()
+            && lowers
+                .iter()
+                .all(|mount| mount.fs_type == CONFIDENTIAL_LOWER_MOUNT)
+            && mounts.len() <= MAX_ROOTFS_LAYER_DEVICES,
+        "expected ordered confidential lowers followed by one private upper"
+    );
+    let manifest = annotations
+        .get(CRI_IMAGE_NAME)
+        .or_else(|| annotations.get(CRI_SANDBOX_IMAGE_NAME))
+        .and_then(|name| name.rsplit_once("@sha256:"))
+        .map(|(_, digest)| digest)
+        .filter(|digest| is_sha256_hex(digest))
+        .context("confidential rootfs requires a digest-pinned OCI manifest reference")?;
+    let upper_path = Path::new(&upper.source);
+    let uppers = upper_path
+        .parent()
+        .context("missing upper cache directory")?;
+    let cache = uppers.parent().context("missing confidential cache root")?;
+    ensure!(
+        upper_path.is_absolute() && uppers.ends_with("uppers"),
+        "invalid private upper path"
+    );
+
+    lowers
+        .iter()
+        .enumerate()
+        .map(|(ordinal, lower)| {
+            let path = Path::new(&lower.source);
+            ensure!(
+                path.parent() == Some(cache.join("blobs").as_path())
+                    && path
+                        .file_name()
+                        .and_then(|file| file.to_str())
+                        .is_some_and(is_sha256_hex),
+                "invalid sealed lower path"
+            );
+            // The snapshotter's mount order is top-first, while descriptor
+            // indexes follow OCI order starting at the base.
+            let index = lowers.len() - 1 - ordinal;
+            let descriptor = cache
+                .join("descriptors")
+                .join(manifest)
+                .join(format!("{index}.json"));
+            ensure!(
+                fs::symlink_metadata(&descriptor)?.is_file(),
+                "invalid signed descriptor file"
+            );
+            let mut envelope = String::new();
+            fs::File::open(&descriptor)
+                .with_context(|| format!("open signed layer descriptor {index}"))?
+                .take((MAX_CONFIDENTIAL_DESCRIPTOR_BYTES + 1) as u64)
+                .read_to_string(&mut envelope)?;
+            ensure!(
+                !envelope.is_empty() && envelope.len() <= MAX_CONFIDENTIAL_DESCRIPTOR_BYTES,
+                "invalid signed layer descriptor size"
+            );
+            Ok(envelope)
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 impl ErofsMultiLayerRootfs {
     pub async fn new(
         device_manager: &RwLock<DeviceManager>,
         sid: &str,
         cid: &str,
         rootfs_mounts: &[Mount],
-        _share_fs: &Option<Arc<dyn crate::share_fs::ShareFs>>,
+        annotations: &HashMap<String, String>,
     ) -> Result<Self> {
+        let confidential = confidential_descriptors(rootfs_mounts, annotations)?;
         let container_path = do_get_guest_path(ROOTFS, cid, false, false);
         let host_path = do_get_host_path(ROOTFS, sid, cid, false, false);
 
@@ -455,7 +550,9 @@ impl ErofsMultiLayerRootfs {
         // Process each mount in rootfs_mounts to set up devices and storages
         for mount in rootfs_mounts {
             match mount.fs_type.as_str() {
-                fmt if fmt.eq_ignore_ascii_case(RW_LAYER_ROOTFS_TYPE) => {
+                fmt if fmt.eq_ignore_ascii_case(RW_LAYER_ROOTFS_TYPE)
+                    || fmt == CONFIDENTIAL_UPPER_MOUNT =>
+                {
                     // Mount[0]: rw layer -> virtio-blk device /dev/vdX1
                     info!(
                         sl!(),
@@ -504,11 +601,18 @@ impl ErofsMultiLayerRootfs {
                     rwlayer.fs_type = RW_LAYER_ROOTFS_TYPE.to_string();
                     rwlayer.mount_point = container_path.clone();
                     rwlayer.options = options;
+                    if fmt == CONFIDENTIAL_UPPER_MOUNT {
+                        rwlayer
+                            .driver_options
+                            .push(CONFIDENTIAL_UPPER_MOUNT.to_string());
+                    }
 
                     rwlayer_storage = Some(rwlayer);
                     device_ids.push(device_id);
                 }
-                fmt if fmt.eq_ignore_ascii_case(EROFS_ROOTFS_TYPE) => {
+                fmt if fmt.eq_ignore_ascii_case(EROFS_ROOTFS_TYPE)
+                    || fmt == CONFIDENTIAL_LOWER_MOUNT =>
+                {
                     // Mount[1]: erofs layers -> virtio-blk via VMDK /dev/vdX2
                     //
                     // Two modes are supported:
@@ -533,7 +637,10 @@ impl ErofsMultiLayerRootfs {
                     let erofs_mounts_indexed: Vec<(usize, &Mount)> = rootfs_mounts
                         .iter()
                         .enumerate()
-                        .filter(|(_, m)| m.fs_type.eq_ignore_ascii_case(EROFS_ROOTFS_TYPE))
+                        .filter(|(_, m)| {
+                            m.fs_type.eq_ignore_ascii_case(EROFS_ROOTFS_TYPE)
+                                || m.fs_type == CONFIDENTIAL_LOWER_MOUNT
+                        })
                         .collect();
                     let total_erofs_mounts = erofs_mounts_indexed.len();
                     // dm-verity metadata path of each EROFS mount, keyed by mount index.
@@ -555,7 +662,10 @@ impl ErofsMultiLayerRootfs {
 
                     // GPT+VMDK mode: used for multiple independent erofs layer files
                     // or when dm-verity is present.
-                    if total_erofs_mounts > 1 || !dmverity_paths.is_empty() {
+                    if confidential.is_some()
+                        || total_erofs_mounts > 1
+                        || !dmverity_paths.is_empty()
+                    {
                         info!(
                             sl!(),
                             "multi-layer erofs: using GPT+VMDK mode for {} independent layers",
@@ -573,6 +683,12 @@ impl ErofsMultiLayerRootfs {
                                 layer_path
                             ))?;
 
+                            if confidential.is_some() {
+                                ensure!(
+                                    size_bytes > 0 && size_bytes.is_multiple_of(4096),
+                                    "invalid sealed layer size"
+                                );
+                            }
                             if size_bytes == 0 {
                                 warn!(
                                     sl!(),
@@ -690,7 +806,15 @@ impl ErofsMultiLayerRootfs {
                                 format!("X-kata.partition-number={}", part.partition_number),
                             ];
 
-                            if let Some(dmverity_path) = dmverity_paths.get(original_mount_idx) {
+                            if let Some(envelopes) = &confidential {
+                                let envelope =
+                                    envelopes.get(idx).context("missing partition descriptor")?;
+                                rolayer
+                                    .driver_options
+                                    .push(format!("{CONFIDENTIAL_LAYER_DESCRIPTOR}{envelope}"));
+                            } else if let Some(dmverity_path) =
+                                dmverity_paths.get(original_mount_idx)
+                            {
                                 info!(
                                     sl!(),
                                     "Found dm-verity annotation for partition {} from {}",
@@ -986,7 +1110,48 @@ pub fn is_erofs_multi_layer(rootfs_mounts: &[Mount]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        confidential_descriptors, CONFIDENTIAL_LOWER_MOUNT, CONFIDENTIAL_UPPER_MOUNT,
+        CRI_IMAGE_NAME,
+    };
     use super::{is_erofs_multi_layer, EROFS_ROOTFS_TYPE, RW_LAYER_ROOTFS_TYPE};
+    use std::{collections::HashMap, fs};
+
+    #[test]
+    fn confidential_descriptors_follow_mount_order_even_for_repeated_backing() {
+        let root = tempfile::tempdir().unwrap();
+        let digest = "a".repeat(64);
+        let descriptors = root.path().join("descriptors").join(&digest);
+        fs::create_dir_all(&descriptors).unwrap();
+        fs::write(descriptors.join("0.json"), "base").unwrap();
+        fs::write(descriptors.join("1.json"), "top").unwrap();
+        let lower = Mount {
+            fs_type: CONFIDENTIAL_LOWER_MOUNT.into(),
+            source: root
+                .path()
+                .join("blobs")
+                .join(&digest)
+                .display()
+                .to_string(),
+            ..Default::default()
+        };
+        let upper = Mount {
+            fs_type: CONFIDENTIAL_UPPER_MOUNT.into(),
+            source: root.path().join("uppers/0").display().to_string(),
+            ..Default::default()
+        };
+        let annotations = HashMap::from([(
+            CRI_IMAGE_NAME.into(),
+            format!("example.com/test@sha256:{digest}"),
+        )]);
+        assert_eq!(
+            confidential_descriptors(&[lower.clone(), lower.clone(), upper.clone()], &annotations)
+                .unwrap(),
+            Some(vec!["top".into(), "base".into()])
+        );
+        assert!(confidential_descriptors(&[upper, lower], &annotations).is_err());
+    }
+
     use kata_types::mount::Mount;
     use std::path::PathBuf;
 

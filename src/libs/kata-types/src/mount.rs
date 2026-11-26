@@ -57,6 +57,16 @@ pub const KATA_VIRTUAL_VOLUME_PREFIX: &str = "io.katacontainers.volume=";
 
 /// Directly assign a block volume to vm and mount it inside guest.
 pub const KATA_VIRTUAL_VOLUME_DIRECT_BLOCK: &str = "direct_block";
+
+/// Mount type for a sealed read-only EROFS backing file.
+pub const CONFIDENTIAL_LOWER_MOUNT: &str = "confidential-lower";
+/// Mount type and guest storage option for a private writable backing device.
+pub const CONFIDENTIAL_UPPER_MOUNT: &str = "confidential-upper";
+/// Guest driver option carrying the signed descriptor for a sealed layer.
+pub const CONFIDENTIAL_LAYER_DESCRIPTOR: &str = "confidential-layer-descriptor=";
+/// Maximum size of a signed layer descriptor in bytes.
+pub const MAX_CONFIDENTIAL_DESCRIPTOR_BYTES: usize = 8192;
+
 /// Present a container image as a generic block device.
 pub const KATA_VIRTUAL_VOLUME_IMAGE_RAW_BLOCK: &str = "image_raw_block";
 /// Present each container image layer as a generic block device.

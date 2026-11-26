@@ -3457,6 +3457,7 @@ dependencies = [
  "protobuf",
  "protocols",
  "regex",
+ "ring",
  "rstest",
  "rtnetlink",
  "runtime-spec",
@@ -3489,6 +3490,7 @@ dependencies = [
  "url",
  "vsock-exporter",
  "which 4.4.2",
+ "zeroize",
 ]
 
 [[package]]

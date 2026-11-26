@@ -88,6 +88,8 @@ vsock-exporter.workspace = true
 async-compression = { features = ["gzip", "tokio"], version = "0.4.22" }
 base64 = { workspace = true }
 sha2 = { workspace = true }
+ring = { version = "0.17.14", optional = true }
+zeroize = { version = "1.8.2", optional = true }
 
 container-device-interface.workspace = true
 
@@ -108,6 +110,6 @@ lto = true
 
 [features]
 agent-policy = ["kata-agent-policy"]
-devicemapper = ["kata-types/devicemapper"]
+devicemapper = ["kata-types/devicemapper", "dep:ring", "dep:zeroize"]
 init-data = []
 seccomp = ["rustjail/seccomp"]

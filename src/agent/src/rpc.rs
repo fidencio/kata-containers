@@ -286,6 +286,23 @@ impl AgentService {
         };
 
         let container_name = k8s::container_name(&oci);
+        #[cfg(feature = "devicemapper")]
+        crate::storage::confidential::check_rootfs_policy(
+            &req.storages,
+            oci.root().as_ref().map(|root| root.path().as_path()),
+        )?;
+        #[cfg(not(feature = "devicemapper"))]
+        if std::path::Path::new(crate::storage::CONFIDENTIAL_ROOTFS_POLICY).try_exists()?
+            || req
+                .storages
+                .iter()
+                .any(crate::storage::has_confidential_storage_option)
+        {
+            return Err(anyhow!(
+                "confidential rootfs requires device-mapper support"
+            ));
+        }
+
         let is_pod_sandbox = k8s::container_type(&oci).is_pod_sandbox();
 
         info!(sl(), "receive createcontainer, spec: {:?}", &oci);
@@ -347,13 +364,18 @@ impl AgentService {
         )
         .await?;
 
+        self.sandbox
+            .lock()
+            .await
+            .container_mounts
+            .insert(cid.clone(), m);
+
         // Handle sealed secrets after storage is mounted
         cdh_handler_sealed_secrets(&mut oci)
             .await
             .map_err(|e| anyhow!("failed to handle sealed secrets: {}", e))?;
 
         let mut s = self.sandbox.lock().await;
-        s.container_mounts.insert(cid.clone(), m);
 
         update_container_namespaces(&s, &mut oci, use_sandbox_pidns)?;
 
@@ -951,7 +973,25 @@ impl agent_ttrpc::AgentService for AgentService {
     ) -> ttrpc::Result<Empty> {
         trace_rpc_call!(ctx, "create_container", req);
         let policy_state = is_allowed_stateful(&req).await?;
-        self.do_create_container(req).await.map_ttrpc_err(same)?;
+        #[cfg(feature = "devicemapper")]
+        let cid = req.container_id.clone();
+        #[cfg(feature = "devicemapper")]
+        let confidential = req
+            .storages
+            .iter()
+            .any(crate::storage::has_confidential_storage_option);
+        if let Err(err) = self.do_create_container(req).await {
+            #[cfg(feature = "devicemapper")]
+            if confidential {
+                let mut sandbox = self.sandbox.lock().await;
+                if sandbox.container_confidential_mappings.contains_key(&cid) {
+                    if let Err(cleanup) = remove_container_resources(&mut sandbox, &cid).await {
+                        warn!(sl(), "failed to clean up confidential rootfs"; "error" => %cleanup);
+                    }
+                }
+            }
+            return Err(err).map_ttrpc_err(same);
+        }
         policy_state.commit().await?;
         Ok(Empty::new())
     }
@@ -2202,6 +2242,9 @@ async fn remove_container_resources(sandbox: &mut Sandbox, cid: &str) -> Result<
             );
         }
     }
+
+    #[cfg(feature = "devicemapper")]
+    sandbox.container_confidential_mappings.remove(cid);
 
     // Cleanup dm-verity devices for this container (after all mounts are unmounted)
     if let Some(verity_devices) = sandbox.container_verity_devices.remove(cid) {

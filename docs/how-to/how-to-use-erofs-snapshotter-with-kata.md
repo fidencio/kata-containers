@@ -410,6 +410,35 @@ If `vmdk` does not appear, you need to rebuild QEMU with VMDK support enabled.
 > mode may work with other hypervisors that support raw virtio-blk devices,
 > but has not been fully tested.
 
+## Confidential EROFS prototype
+
+Runtime-rs can receive sealed layers from a snapshotter that emits
+`confidential-lower` mounts followed by one `confidential-upper` mount.
+On QEMU, the runtime puts the sealed lowers on one read-only GPT/VMDK
+device. The guest verifies the signed layer descriptors, opens dm-verity
+and LUKS read-only, and mounts EROFS underneath the existing overlay. The
+guest initializes the private ext4 upper on an encrypted device.
+
+Use the legacy `podsandbox` sandboxer for this prototype. Pull the pinned
+pause image and workload image through the CRI image wrapper before the
+offline test. Use single-manifest digest references in the workload and
+pause image configuration, with strict supplemental groups and numeric
+UID and GID. Set containerd's `ignore_image_defined_volumes` for this test
+node. The shim uses the pinned image name to locate the descriptor files
+in the snapshotter cache.
+
+Use a test guest with device-mapper support in the kernel and agent, plus
+`cryptsetup` and `mkfs.ext4`. Provision
+`/etc/kata-containers/confidential-rootfs.json` in the guest image with
+`manifests`, an array of authorized `sha256:` manifest digests, and
+`public_key`, the standard Base64 encoding of the raw 32-byte worker
+Ed25519 public key. Include the pause manifest in the allowlist.
+Place the fixture keys under
+`/etc/kata-containers/confidential-rootfs.keys`, using the unprefixed
+layer DiffID as each filename. Use a normal VM with test-only keys.
+Attested production provisioning of that policy and the keys is a
+separate integration.
+
 ## References
 
 - [EROFS documentation](https://erofs.docs.kernel.org)

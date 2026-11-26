@@ -24,7 +24,7 @@ use self::{
     block_rootfs::is_block_rootfs, erofs_rootfs::ErofsMultiLayerRootfs,
     nydus_rootfs::NYDUS_ROOTFS_TYPE,
 };
-use crate::rootfs::erofs_rootfs::is_erofs_multi_layer;
+use crate::rootfs::erofs_rootfs::{is_confidential_rootfs, is_erofs_multi_layer};
 use crate::share_fs::{NydusShareFs, ShareFs};
 use oci_spec::runtime as oci;
 
@@ -96,17 +96,22 @@ impl RootFsResource {
                     Err(anyhow!("share fs is unavailable"))
                 }
             }
-            _ if is_erofs_multi_layer(rootfs_mounts) => {
+            _ if is_confidential_rootfs(rootfs_mounts) || is_erofs_multi_layer(rootfs_mounts) => {
                 info!(
                     sl!(),
                     "handling multi-layer erofs rootfs with {} mounts",
                     rootfs_mounts.len()
                 );
 
-                let multi_layer =
-                    ErofsMultiLayerRootfs::new(device_manager, sid, cid, rootfs_mounts, share_fs)
-                        .await
-                        .context("new multi-layer erofs rootfs")?;
+                let multi_layer = ErofsMultiLayerRootfs::new(
+                    device_manager,
+                    sid,
+                    cid,
+                    rootfs_mounts,
+                    annotations,
+                )
+                .await
+                .context("new multi-layer erofs rootfs")?;
 
                 let ret = Arc::new(multi_layer);
                 let mut inner = self.inner.write().await;

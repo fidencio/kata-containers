@@ -136,38 +136,43 @@ enum DmSetupResult {
     NeedUdevWait,
 }
 
-/// Destroy a dm-verity device by name.
-pub fn destroy_dmverity_device(verity_device_name: &str) -> Result<()> {
+/// Schedule removal of a device-mapper device by name.
+fn destroy_dm_device(name: &str) -> Result<()> {
     let dm = devicemapper::DM::new()?;
-    let name = devicemapper::DmName::new(verity_device_name)?;
+    let dm_name = devicemapper::DmName::new(name)?;
 
-    dm.device_remove(&devicemapper::DevId::Name(name), dm_remove_options())
-        .context(format!("remove DmverityDevice {}", verity_device_name))?;
+    dm.device_remove(&devicemapper::DevId::Name(dm_name), dm_remove_options())
+        .with_context(|| format!("remove device-mapper device {name}"))?;
 
     Ok(())
 }
 
+/// Schedule removal of a device-mapper device and clean up its device node.
+pub fn destroy_dm_device_at_path(device_path: &str) -> Result<()> {
+    let name = device_path
+        .strip_prefix("/dev/mapper/")
+        .unwrap_or(device_path);
+    destroy_dm_device(name)?;
+
+    if !has_udev() {
+        remove_dm_dev_node(device_path);
+    }
+
+    Ok(())
+}
+
+/// Destroy a dm-verity device by name.
+pub fn destroy_dmverity_device(verity_device_name: &str) -> Result<()> {
+    destroy_dm_device(verity_device_name)
+}
+
 /// Destroy a dm-verity device by its `/dev/mapper/` path.
 pub fn destroy_partition_dmverity_device(verity_device_path: &str, logger: &Logger) -> Result<()> {
-    // The verity device path is /dev/mapper/<name> (as created by create_dm_dev_node).
-    // Extract the DM device name for removal. Also remove the mknod-created device node.
     let device_name = verity_device_path
         .strip_prefix("/dev/mapper/")
-        .unwrap_or(verity_device_path)
-        .to_string();
-
-    destroy_dmverity_device(&device_name).context("Failed to destroy dm-verity device")?;
-    info!(
-        logger,
-        "Destroying dm-verity device";
-        "device-name" => &device_name,
-    );
-
-    // Only remove the device node manually if we created it via mknod.
-    // When udev is running, it handles node lifecycle automatically.
-    if !has_udev() {
-        remove_dm_dev_node(verity_device_path);
-    }
+        .unwrap_or(verity_device_path);
+    destroy_dm_device_at_path(verity_device_path).context("Failed to destroy dm-verity device")?;
+    info!(logger, "Destroying dm-verity device"; "device-name" => device_name);
 
     Ok(())
 }

@@ -14,12 +14,16 @@
 //! - Supports GPT-partitioned disks with dm-verity integrity verification for each partition
 
 use std::collections::HashMap;
+#[cfg(feature = "devicemapper")]
+use std::convert::TryFrom;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 
+#[cfg(feature = "devicemapper")]
+use super::confidential;
 use crate::device::block_device_handler::{
     get_virtio_blk_mmio_device_name, get_virtio_blk_pci_device_name,
 };
@@ -28,8 +32,8 @@ use crate::linux_abi::pcipath_from_dev_tree_path;
 use crate::mount::baremount;
 use crate::rpc::CONTAINER_BASE;
 use crate::sandbox::Sandbox;
-use crate::storage::{StorageContext, StorageHandler};
-use anyhow::{anyhow, Context, Result};
+use crate::storage::{has_confidential_storage_option, StorageContext, StorageHandler};
+use anyhow::{anyhow, ensure, Context, Result};
 use kata_sys_util::mount::{create_mount_destination, Mounter};
 use kata_types::device::{DRIVER_BLK_MMIO_TYPE, DRIVER_BLK_PCI_TYPE, DRIVER_SCSI_TYPE};
 #[cfg(feature = "devicemapper")]
@@ -84,7 +88,7 @@ const OPT_DMVERITY_NO_SUPERBLOCK: &str = "X-kata.dmverity.no-superblock=";
 #[derive(Debug)]
 pub struct MultiLayerErofsHandler {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MultiLayerErofsResult {
     pub mount_point: String,
     pub processed_mount_points: Vec<String>,
@@ -94,6 +98,8 @@ pub struct MultiLayerErofsResult {
     pub temp_mount_points: Vec<String>,
     /// dm-verity device paths that need to be destroyed during cleanup
     pub verity_devices: Vec<String>,
+    #[cfg(feature = "devicemapper")]
+    pub(crate) confidential_mappings: Option<confidential::RootfsMappings>,
 }
 
 #[derive(Debug)]
@@ -105,6 +111,14 @@ struct MkdirDirective {
 #[derive(Debug)]
 struct LayerMountInfo {
     verity_device: Option<String>,
+    #[cfg(feature = "devicemapper")]
+    confidential_mapping: Option<confidential::Mapping>,
+}
+
+#[cfg(feature = "devicemapper")]
+enum ConfidentialLayer<'a> {
+    Lower(&'a confidential::Layer),
+    Upper,
 }
 
 #[async_trait::async_trait]
@@ -213,6 +227,48 @@ pub async fn handle_multi_layer_erofs_group(
         erofs_storages.sort_by_key(|storage| get_partition_number(storage).unwrap_or(u32::MAX));
     }
 
+    let confidential_rootfs = multi_layer_storages
+        .iter()
+        .any(|storage| has_confidential_storage_option(storage));
+    #[cfg(not(feature = "devicemapper"))]
+    ensure!(
+        !confidential_rootfs,
+        "confidential rootfs requires device-mapper support"
+    );
+
+    #[cfg(feature = "devicemapper")]
+    let confidential_lowers = if confidential_rootfs {
+        let upper = upper_storage.context("missing private encrypted upper")?;
+        ensure!(
+            cid.is_some()
+                && multi_layer_storages.len() == erofs_storages.len() + 1
+                && multi_layer_storages
+                    .iter()
+                    .all(|storage| { storage.mount_point == upper.mount_point && !storage.shared })
+                && !is_gpt_partitioned(upper)
+                && !is_dmverity_enabled(upper)
+                && erofs_storages.iter().all(|storage| {
+                    storage.fstype == EROFS_TYPE
+                        && is_gpt_partitioned(storage)
+                        && !is_dmverity_enabled(storage)
+                })
+                && mkdir_dirs.is_empty(),
+            "invalid confidential EROFS storage group"
+        );
+        ensure!(
+            erofs_storages.iter().enumerate().all(|(index, storage)| {
+                get_partition_number(storage) == u32::try_from(index + 1).ok()
+            }),
+            "confidential layers must occupy consecutive partitions in overlay order"
+        );
+        Some(confidential::verify_group(upper, &erofs_storages)?)
+    } else {
+        None
+    };
+
+    #[cfg(feature = "devicemapper")]
+    let mut confidential_mappings = Vec::new();
+
     // With an explicit upper layer, the upper Storage carries the final overlay
     // target. With an implicit /run-backed upper, the runtime puts that target
     // on the first EROFS lower Storage.
@@ -265,7 +321,24 @@ pub async fn handle_multi_layer_erofs_group(
     fs::create_dir_all(&upper_mount).context("failed to create upper mount dir")?;
 
     if let Some(upper) = upper_storage {
-        wait_and_mount_layer(upper, &upper_mount, sandbox, &logger, None).await?;
+        let info = wait_and_mount_layer(
+            upper,
+            &upper_mount,
+            sandbox,
+            &logger,
+            None,
+            #[cfg(feature = "devicemapper")]
+            confidential_lowers
+                .as_ref()
+                .map(|_| ConfidentialLayer::Upper),
+        )
+        .await?;
+        #[cfg(feature = "devicemapper")]
+        if let Some(mapping) = info.confidential_mapping {
+            confidential_mappings.push(mapping);
+        }
+        #[cfg(not(feature = "devicemapper"))]
+        let _ = info;
     } else {
         info!(
             logger,
@@ -338,10 +411,22 @@ pub async fn handle_multi_layer_erofs_group(
             let lower_mount = lower_mount_paths[index].clone();
             let sandbox = Arc::clone(sandbox);
             let logger = logger.clone();
+            #[cfg(feature = "devicemapper")]
+            let confidential = confidential_lowers
+                .as_ref()
+                .map(|lowers| ConfidentialLayer::Lower(&lowers[index]));
             async move {
-                wait_and_mount_layer(erofs, &lower_mount, &sandbox, &logger, base_dev_path)
-                    .await
-                    .map(|mount_info| (index, lower_mount, mount_info))
+                wait_and_mount_layer(
+                    erofs,
+                    &lower_mount,
+                    &sandbox,
+                    &logger,
+                    base_dev_path,
+                    #[cfg(feature = "devicemapper")]
+                    confidential,
+                )
+                .await
+                .map(|mount_info| (index, lower_mount, mount_info))
             }
         })
         .collect();
@@ -407,6 +492,10 @@ pub async fn handle_multi_layer_erofs_group(
         lower_mounts.push(lower_mount);
         if let Some(verity_dev) = mount_info.verity_device {
             verity_devices.push(verity_dev);
+        }
+        #[cfg(feature = "devicemapper")]
+        if let Some(mapping) = mount_info.confidential_mapping {
+            confidential_mappings.push(mapping);
         }
     }
 
@@ -480,6 +569,17 @@ pub async fn handle_multi_layer_erofs_group(
         .mount(Path::new(&target_mount_point))
         .context("failed to mount overlay")?;
 
+    let overlay_guard = scopeguard::guard(
+        confidential_rootfs.then_some(target_mount_point.as_str()),
+        |target| {
+            if let Some(target) = target {
+                if let Err(err) = nix::mount::umount(target) {
+                    warn!(logger, "failed to unmount confidential overlay"; "error" => %err);
+                }
+            }
+        },
+    );
+
     info!(
         logger,
         "Multi-layer EROFS overlay mounted successfully";
@@ -517,11 +617,18 @@ pub async fn handle_multi_layer_erofs_group(
     track_temporary_mount_for_cleanup(sandbox, &temp_base, &logger).await?;
     temp_mount_points.push(temp_base.display().to_string());
 
+    scopeguard::ScopeGuard::into_inner(overlay_guard);
+    #[cfg(feature = "devicemapper")]
+    let confidential_mappings = confidential_rootfs.then(|| {
+        confidential::RootfsMappings::new(target_mount_point.clone(), confidential_mappings)
+    });
     Ok(MultiLayerErofsResult {
         mount_point: target_mount_point,
         processed_mount_points,
         temp_mount_points,
         verity_devices,
+        #[cfg(feature = "devicemapper")]
+        confidential_mappings,
     })
 }
 
@@ -803,6 +910,7 @@ async fn wait_and_mount_layer(
     sandbox: &Arc<Mutex<Sandbox>>,
     logger: &Logger,
     base_dev_path: Option<String>,
+    #[cfg(feature = "devicemapper")] confidential: Option<ConfidentialLayer<'_>>,
 ) -> Result<LayerMountInfo> {
     info!(
         logger,
@@ -874,6 +982,19 @@ async fn wait_and_mount_layer(
         (base_dev_path.clone(), None)
     };
 
+    #[cfg(feature = "devicemapper")]
+    let (dev_path, mut confidential_mapping) = match confidential {
+        Some(ConfidentialLayer::Lower(layer)) => {
+            let (path, mapping) = confidential::open_lower(&dev_path, layer).await?;
+            (path, Some(mapping))
+        }
+        Some(ConfidentialLayer::Upper) => {
+            let (path, mapping) = confidential::open_upper(dev_path).await?;
+            (path, Some(mapping))
+        }
+        None => (dev_path, None),
+    };
+
     info!(
         logger,
         "Mounting layer";
@@ -898,6 +1019,8 @@ async fn wait_and_mount_layer(
         );
         // EROFS layers must be mounted read-only
         (nix::mount::MsFlags::MS_RDONLY, "ro".to_string())
+    } else if has_confidential_storage_option(layer) {
+        (nix::mount::MsFlags::empty(), String::new())
     } else {
         // For non-EROFS layers, we can apply any specified mount options.
         // Filter out X-kata.* custom options before mount
@@ -928,11 +1051,18 @@ async fn wait_and_mount_layer(
     )
     .context("failed to mount layer")?;
 
+    #[cfg(feature = "devicemapper")]
+    if let Some(mapping) = confidential_mapping.as_mut() {
+        mapping.mounted(layer_mount);
+    }
+
     // After successfully mounting the layer, we track the mount point for cleanup.
     track_temporary_mount_for_cleanup(sandbox, layer_mount, logger).await?;
 
     Ok(LayerMountInfo {
         verity_device: verity_device_path,
+        #[cfg(feature = "devicemapper")]
+        confidential_mapping,
     })
 }
 

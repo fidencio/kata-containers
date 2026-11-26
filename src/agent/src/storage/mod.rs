@@ -42,11 +42,22 @@ use crate::sandbox::Sandbox;
 
 mod bind_watcher_handler;
 mod block_handler;
+#[cfg(feature = "devicemapper")]
+pub(crate) mod confidential;
 mod ephemeral_handler;
 mod fs_handler;
 mod image_pull_handler;
 mod local_handler;
 pub mod multi_layer_erofs;
+
+pub(crate) const CONFIDENTIAL_ROOTFS_POLICY: &str = "/etc/kata-containers/confidential-rootfs.json";
+
+pub(crate) fn has_confidential_storage_option(storage: &Storage) -> bool {
+    storage.driver_options.iter().any(|option| {
+        option == kata_types::mount::CONFIDENTIAL_UPPER_MOUNT
+            || option.starts_with(kata_types::mount::CONFIDENTIAL_LAYER_DESCRIPTOR)
+    })
+}
 
 const RW_MASK: u32 = 0o660;
 const RO_MASK: u32 = 0o440;
@@ -179,6 +190,8 @@ struct MultiLayerProcessResult {
     temp_mount_points: Vec<String>,
     /// dm-verity device paths that need to be destroyed during cleanup
     verity_devices: Vec<String>,
+    #[cfg(feature = "devicemapper")]
+    confidential_mappings: Option<confidential::RootfsMappings>,
 }
 
 /// Handle multi-layer storage by creating the overlay device.
@@ -221,6 +234,8 @@ async fn handle_multi_layer_storage(
         processed_mount_points: result.processed_mount_points,
         temp_mount_points: result.temp_mount_points,
         verity_devices: result.verity_devices,
+        #[cfg(feature = "devicemapper")]
+        confidential_mappings: result.confidential_mappings,
     }))
 }
 
@@ -328,6 +343,18 @@ pub async fn add_storages(
                         .or_insert_with(Vec::new)
                         .extend(result.verity_devices.clone());
                 }
+            }
+
+            #[cfg(feature = "devicemapper")]
+            if let Some(mappings) = result.confidential_mappings {
+                let cid = cid
+                    .as_ref()
+                    .context("confidential rootfs requires a container ID")?;
+                sandbox
+                    .lock()
+                    .await
+                    .container_confidential_mappings
+                    .insert(cid.clone(), mappings);
             }
 
             continue;

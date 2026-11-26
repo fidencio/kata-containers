@@ -140,7 +140,11 @@ fn show_info() -> Result<()> {
     info.version = Some(version).into();
     info.annotations.insert(
         RUNTIME_ALLOW_MOUNTS.to_string(),
-        "mkdir/*,format/*,erofs".to_string(),
+        format!(
+            "mkdir/*,format/*,erofs,{},{}",
+            kata_types::mount::CONFIDENTIAL_LOWER_MOUNT,
+            kata_types::mount::CONFIDENTIAL_UPPER_MOUNT,
+        ),
     );
 
     let data = info
